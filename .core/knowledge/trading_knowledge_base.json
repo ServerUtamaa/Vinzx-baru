@@ -1,0 +1,527 @@
+{
+  "system_version": "V10.0",
+  "engine_name": "Universal AI Trading Engine",
+  "core_rules": {
+    "mandatory_processing": "100% isi, rumus, logika, aturan, contoh, validasi dari setiap dokumen.",
+    "conflict_resolution": "Gunakan metode dengan probabilitas institusional tertinggi.",
+    "decision_priority": [
+      "Market Structure",
+      "Smart Money Concept",
+      "Liquidity",
+      "Supply Demand",
+      "Volume",
+      "Momentum",
+      "Price Action",
+      "Candlestick Pattern"
+    ],
+    "no_trade_zones": [
+      "Probabilitas rendah",
+      "RR buruk",
+      "Zona belum valid",
+      "Market tidak jelas",
+      "Struktur belum selesai",
+      "Likuiditas belum diambil",
+      "Masih manipulasi",
+      "Harga berada di tengah zona (tunggu konfirmasi)"
+    ]
+  },
+  "modules": {
+    "supply_demand": {
+      "source": "From Gambler to Trader - Supply and Demand 101 (Uncensored Trader)",
+      "supply_zone_definition": "Kenaikan harga terakhir sebelum penurunan drastis. Area dimana penjual dominan.",
+      "demand_zone_definition": "Penurunan harga terakhir sebelum kenaikan terakhir (drastis). Area dimana pembeli dominan.",
+      "step_by_step_execution": {
+        "step_1": "High TF - Menentukan market bullish atau bearish.",
+        "step_2": "Tarik Fibo, usahakan buy/sell pada daerah discount/premium zone (usahakan entry di bawah garis 61.8 untuk set up berkualitas tinggi).",
+        "step_3": "Membentuk IMBALANCE. Zona Supply/Demand valid jika harga membentuk IMBALANCE setelah zona terbentuk.",
+        "step_4": "Entry dengan cara Limit atau Konfirmasi."
+      },
+      "entry_types": {
+        "limit_entry": {
+          "timeframe": "1 TF saja (M15 / M30 / H1)",
+          "characteristics": [
+            "RR biasanya lebih kecil",
+            "Entry trade hampir selalu terambil",
+            "Tidak perlu terlalu lama memperhatikan chart"
+          ]
+        },
+        "confirmation_entry": {
+          "process": [
+            "Menunggu supply/demand H1/H4 dimitigasi.",
+            "Menunggu terjadinya CHoCH.",
+            "Akan terbentuk zona baru (Demand/Supply) di TF M15.",
+            "Lakukan entry di zona baru tersebut."
+          ],
+          "characteristics": [
+            "RR relatif lebih besar",
+            "Terkadang entry trade tidak terambil (missed)",
+            "Harus selalu memperhatikan chart"
+          ]
+        }
+      }
+    },
+    "market_structure": [
+      "Higher High",
+      "Higher Low",
+      "Lower High",
+      "Lower Low",
+      "BOS",
+      "CHoCH",
+      "MSS",
+      "Breakout",
+      "False Breakout",
+      "Internal Structure",
+      "External Structure",
+      "Trend Continuation",
+      "Trend Reversal",
+      "Accumulation",
+      "Distribution",
+      "Manipulation",
+      "Expansion",
+      "Compression",
+      "Consolidation",
+      "Range",
+      "Trending"
+    ],
+    "smart_money": [
+      "Order Block",
+      "Breaker Block",
+      "Mitigation Block",
+      "Rejection Block",
+      "Liquidity Pool",
+      "Liquidity Grab",
+      "Liquidity Sweep",
+      "Stop Hunt",
+      "Equal High",
+      "Equal Low",
+      "Premium",
+      "Discount",
+      "Fair Value Gap",
+      "Inverse FVG",
+      "Imbalance",
+      "Institutional Candle",
+      "Institutional Entry",
+      "Engineered Liquidity",
+      "Market Maker Trap"
+    ],
+    "multi_timeframe_logic": {
+      "M1": "Scalping sangat cepat. Target kecil. Sensitif terhadap noise.",
+      "M5": "Scalping. Validasi cepat. Fokus momentum.",
+      "M15": "Intraday. Konfirmasi trend. Validasi Supply Demand.",
+      "M30": "Day Trade. Trend harian. Momentum utama.",
+      "H1": "Swing mingguan. Trend besar. Zona institusi lebih dominan.",
+      "H4": "Swing bulanan. Analisa struktur utama. Validasi Smart Money paling tinggi."
+    },
+    "ilmu_lazat_trading_chapter_2": {
+      "source": "ILMU LAZAT TRADING CHAPTER 2 - Trade With Jags Bah",
+      "asas_trading": {
+        "teknikal_analisis": [
+          "Support And Resistant",
+          "Trendline",
+          "Market structure",
+          "Supply And Demand"
+        ],
+        "fundamental_analisis": [
+          "Interest Rate",
+          "Inflation Rate"
+        ]
+      },
+      "platform_orders": {
+        "market_execution": "Serta merta meletakkan posisi BUY/SELL.",
+        "limit_order": "Pending order untuk trigger pada level yang diinginkan tanpa melihat chart setiap masa.",
+        "stop_order": "SELL STOP (jangkaan price turun lebih jauh), BUY STOP (jangkaan price naik lebih jauh).",
+        "stoploss_sl": "Order untuk close entry di level tertentu jika price berlawanan analisis (menghindari Margin Call).",
+        "takeprofit_tp": "Order untuk close position secara auto dalam keadaan profit."
+      },
+      "instrumen_pair": {
+        "forex": [
+          "AUDUSD",
+          "EURUSD",
+          "GBPJPY",
+          "GBPUSD"
+        ],
+        "metals": [
+          "XAUUSD (GOLD)",
+          "XAGUSD (SILVER)"
+        ]
+      },
+      "kalkulasi_pips_spread": {
+        "spread": "Perbezaan BID PRICE dan ASK PRICE. BUY = ASK PRICE, SELL = BID PRICE. Digunakan broker untuk keuntungan.",
+        "jenis_spread": [
+          "Fixed Spread (Tetap)",
+          "Variable Spread (Sentiasa Berubah)"
+        ],
+        "pips_logic": "Dikira menggunakan point perubahan harga. 10 POINT = 1 PIP.",
+        "contoh_pips": "Buy XAUUSD di 1948, naik ke 1950 = Profit 200 points (20 pips)."
+      }
+    },
+    "ilmu_lazat_trading_chapter_3": {
+      "source": "ILMU LAZAT TRADING CHAPTER 3 - Trade With Jags Bah",
+      "support_and_resistance": {
+        "definisi": "Teknik klasik (SnR) untuk menanda paras harga paling tinggi dan rendah, mencari entry dengan risiko minimum.",
+        "resistant": "Paras harga tertinggi yang mampu menghalang harga untuk naik lebih jauh (SILING/HALANGAN). Digunakan untuk SELL.",
+        "support": "Paras harga terendah untuk menghalang harga untuk turun lebih jauh (LANTAI/SOKONGAN). Digunakan untuk BUY."
+      },
+      "breakout_snr": {
+        "resistant_breakout": "Resistant yang dibreakout secara langsung akan berubah sifat menjadi support. RBS (Resistant Become Support) = BUY.",
+        "support_breakout": "Support yang dibreakout secara langsung akan berubah sifat menjadi resistant. SBR (Support Become Resistant) = SELL."
+      },
+      "market_structure": {
+        "definisi": "Karakteristik berorganisasi di dalam pasar untuk membaca pergerakan harga menaik, menurun, dan mendatar.",
+        "komponen": {
+          "LOW": "Harga terendah (SUPPORT)",
+          "HIGH": "Harga Tertinggi (RESISTANT)",
+          "LOWER_LOW": "Support baharu yang lebih rendah daripada sebelumnya (Downtrend)",
+          "LOWER_HIGH": "Resistant baharu yang lebih rendah daripada sebelumnya (Downtrend)",
+          "HIGHER_LOW": "Support baharu yang lebih tinggi daripada sebelumnya (Uptrend)",
+          "HIGHER_HIGH": "Resistant baharu yang lebih tinggi daripada sebelumnya (Uptrend)"
+        },
+        "fase_pergerakan": {
+          "uptrend": "Pergerakan harga membuat urutan Higher High (HH) dan Higher Low (HL). Support lama di-break menjadi resistance, lalu support baru terbentuk lebih tinggi.",
+          "downtrend": "Pergerakan harga membuat urutan Lower High (LH) dan Lower Low (LL). Support dibreak menjadi resistant (SBR), kemudian membuat retest pada broken support.",
+          "sideways": "Pergerakan harga pada julat yang sama. Harga memantul antara garis High (Resistant) dan Low (Support) yang sejajar/mendatar."
+        }
+      }
+    },
+    "strategy_trader_investor_yuni": {
+      "source": "Strategy Yang Tepat Untuk Menjadi Seorang Trader / Investor (#YuniSasmita)",
+      "trader_vs_investor": {
+        "trader": {
+          "tujuan": "Akumulasi Profit",
+          "jangka_waktu": "Pendek (Short) / Harian - Bulanan",
+          "metode_analisis": "Teknikal Analisis (TA)",
+          "monitoring": "Sangat Aktif",
+          "alat": "Data Realtime / Grafik",
+          "strategy_rules": "Tidak Boleh Average Down (Wajib Cut Loss)"
+        },
+        "investor": {
+          "tujuan": "Pelipatgandaan Profit",
+          "jangka_waktu": "Panjang (Long) / Tahunan",
+          "metode_analisis": "Fundamental Analisis (FA)",
+          "monitoring": "Jarang",
+          "alat": "Laporan Keuangan & Neraca",
+          "strategy_rules": "Boleh Average Down"
+        }
+      },
+      "trading_plan_rules": [
+        "Tentukan strategi untuk entry (contoh: Reversal atau Breakout)",
+        "Tentukan risk/reward ratio (Kapan waktu untuk keluar/Stop Loss)",
+        "Tentukan position size sesuai dengan target stop loss",
+        "Tentukan strategi exit / take profit sebelum entry dilakukan",
+        "Buat jurnal dan catatan untuk evaluasi (Profit atau Loss)"
+      ],
+      "money_management": {
+        "golden_rule": "Do Not Put All Eggs in One Basket (Jangan menghabiskan seluruh modal dalam satu posisi atau satu waktu saja)",
+        "kunci_sukses": "Sabar (menunggu momen), Disiplin (ikuti plan), Fokus (perhatikan watchlist), Money Management (atur modal)"
+      },
+      "momentum_siklus_market": {
+        "bullish": "Demand = Buyer dominan. Terjadi saat pasar sedang trend naik/menguat. Saat panic, buyer mau beli barang lebih mahal.",
+        "bearish": "Supply = Seller dominan. Terjadi saat pasar sedang trend turun/melemah. Saat panic, seller mau jual barang lebih murah.",
+        "waktu_buy": [
+          "Harga menyentuh level terendah (Support kuat)",
+          "Terjadinya pemulihan (Recovery)",
+          "Ada signal pembalikan arah (Reversal) / Muncul Inside Bar / HH HL",
+          "BUY apabila BreakOut melewati garis Resistance (Green Line)"
+        ],
+        "waktu_sell": [
+          "Harga menyentuh harga tertinggi (Resistance kuat)",
+          "Terjadinya koreksi (Aksi ambil untung / Profit Taking)",
+          "Ada signal pembalikan arah (Reversal) / Muncul Inside Bar / LH LL",
+          "SELL / Cut Loss apabila BreakDown melewati garis Support (Red Line)"
+        ]
+      },
+      "indikator_tambahan": {
+        "doji": "Candle tanpa body (Indecision). Semakin panjang ekor, semakin kuat indikasi reversal. Sangat penting jika terjadi di level Support/Resistance.",
+        "moving_average_ma": "Lagging indicator. Selama candle di atas MA5/MA10 = BUY. Di bawah MA5/MA10 = SELL. Golden cross (ke atas) = BUY, Death cross (ke bawah) = SELL."
+      }
+    },
+    "technical_analysis_mega_profit": {
+      "source": "Technical Analysis for Mega Profit (Edianto Ong)",
+      "konsep_dasar_dow_theory": {
+        "prinsip_1": "Market action discounts everything (Pergerakan harga telah mewakili semua faktor lain).",
+        "prinsip_2": "Prices move in trends (Terdapat suatu pola kecenderungan dalam pergerakan harga).",
+        "prinsip_3": "History repeats itself (Sejarah akan terulang).",
+        "hirarki_trend": {
+          "major_trend": "Primary trend. Lebih dari setahun.",
+          "secondary_trend": "Intermediate trend. Tiga minggu sampai tiga bulan. Sering menjadi koreksi (pullback) dari major trend.",
+          "minor_trend": "Nearest-term trend. Kurang dari tiga minggu (fluktuasi harian)."
+        },
+        "fase_trend": [
+          "Akumulasi",
+          "Partisipasi Publik",
+          "Distribusi"
+        ]
+      },
+      "analisis_trendline_channels": {
+        "validitas_trendline": "Minimal butuh 2 titik penghubung. Titik ke-3 adalah ujian validasi sah (valid break/bounce).",
+        "penembusan_garis_trend": "Breakout/Breakdown harus disertai closing price yang kuat. Hati-hati whipsaws (false break).",
+        "channeling": {
+          "uptrend_channeling": "Garis bawah = basic trendline (support). Garis atas = channel line (resistance).",
+          "downtrend_channeling": "Garis atas = basic trendline (resistance). Garis bawah = channel line (support).",
+          "break_channel": "Break pada basic trendline = tanda awal perubahan trend. Break pada channel line = akselerasi trend (semakin kuat)."
+        },
+        "fan_principle": "Penembusan 3 trendline berturut-turut dari satu titik puncak/lembah (A) menandakan konfirmasi pembalikan arah trend."
+      },
+      "analisis_gaps": {
+        "common_gap": "Paling sering terjadi, tidak penting, tidak didukung lonjakan volume, akan tertutup cepat.",
+        "break_away_gap": "Penting. Lompatan harga menembus level support/resistance yang solid, didukung volume signifikan. Tanda awal pergerakan rally besar.",
+        "run_away_gap": "Terjadi di tengah-tengah tren yang sedang berlangsung. Menandakan intensitas yang tinggi.",
+        "exhaustion_gap": "Gap tanda kelelahan di akhir rally. Diikuti volume menipis. Biasanya tertutup cepat dan menjadi sinyal reversal kuat.",
+        "island_reversal": "Exhaustion gap yang diikuti oleh break away gap ke arah berlawanan. Sinyal pembalikan arah yang sangat mematikan (vital)."
+      },
+      "chart_patterns_reversal": {
+        "head_and_shoulders": "Puncak tengah (Head) tertinggi, diapit Left dan Right Shoulder. Konfirmasi SELL saat break Neckline. Volume harus menipis di Right Shoulder.",
+        "inverted_head_and_shoulders": "Kebalikan dari H&S (Bullish reversal). Konfirmasi BUY saat break Neckline ke atas.",
+        "double_triple_tops": "2 atau 3 puncak yang sejajar. Reversal Bearish.",
+        "double_triple_bottoms": "2 atau 3 lembah yang sejajar. Reversal Bullish.",
+        "horn_tops_bottoms": "Mirip Double Tops/Bottoms tapi puncaknya berupa garis single (tanduk) berdekatan (1-3 minggu)."
+      },
+      "chart_patterns_continuation": {
+        "symmetrical_triangle": "Bentuk netral (koil), breakout mengikuti arah trend sebelumnya.",
+        "ascending_triangle": "Batas atas mendatar (Resistance kuat), batas bawah naik (Higher Lows). Bullish continuation.",
+        "descending_triangle": "Batas bawah mendatar (Support kuat), batas atas turun (Lower Highs). Bearish continuation.",
+        "flags_and_pennants": "Pola bendera (Flags) dan panji (Pennants). Terjadi setelah rally kuat (tiang/flagpole). Pola konsolidasi singkat (1-4 minggu) sebelum lanjut rally.",
+        "wedges": "Rising Wedge (Bearish), Falling Wedge (Bullish).",
+        "rectangles": "Harga bergerak di dalam range paralel horizontal."
+      },
+      "technical_indicators_kompleks": {
+        "obv_on_balance_volume": "Mengkonfirmasi arah trend. Jika harga naik tapi OBV turun = Divergence (Peringatan Reversal).",
+        "adx_dmi": "Mengukur kekuatan trend. ADX naik = trend menguat. DI+ potong DI- ke atas = BUY."
+      },
+      "psikologi_dan_anomali": {
+        "suicide_anomaly": "Sifat ego Trader yang menolak cut loss (Averaging Down pada saat salah posisi). Hal ini membunuh akun. The rule: Never trade with money you cannot afford to lose.",
+        "angka_psikologi": "Support/Resistance tak kasat mata di angka bulat (10, 50, 100, 1000).",
+        "false_breakout_antisipasi": "Gunakan toleransi 1.5% hingga 3% atau konfirmasi closing price 2 hari (2-day rules) untuk memastikan penembusan bukan jebakan whipsaws."
+      }
+    },
+    "daily_profile_london_reversal": {
+      "source": "The Daily Profile Guide: Volume 1 - London Reversal",
+      "time_variables_est": {
+        "london_session": "02:00 - 05:00 EST (Intraday reversal forms, minimal menyentuh H1 PDA)",
+        "new_york_forex": "07:00 - 10:00 EST (High-probability expansion time window, pembentukan mayoritas daily range)",
+        "new_york_indices": "08:30 - 12:00 EST (High-probability expansion time window)",
+        "midnight_open": "00:00 EST (Digunakan sebagai garis keseimbangan/equilibrium)"
+      },
+      "framework_pd_arrays": {
+        "premium_above_midnight": [
+          "External High / BSL (Buy Side Liquidity)",
+          "Rejection Block (-RB)",
+          "Order Block (-OB)",
+          "Breaker Block (-BRK)",
+          "Fair Value Gap (-FVG)"
+        ],
+        "discount_below_midnight": [
+          "External Low / SSL (Sell Side Liquidity)",
+          "Rejection Block (+RB)",
+          "Order Block (+OB)",
+          "Breaker Block (+BRK)",
+          "Fair Value Gap (+FVG)"
+        ]
+      },
+      "london_reversal_patterns": {
+        "bullish_reversal": {
+          "setup": "Harga drop ke bawah Midnight Open (0:00 EST) menuju Discount H1 PDA antara jam 02:00 - 05:00 EST.",
+          "judas_swing": "Gerakan drop menipu ke bawah ini disebut Protraction (Judas Swing) untuk memburu likuiditas (Sell Stops) lalu membentuk London Low.",
+          "change_in_state_of_delivery": "M15 candle close di atas Breaker (+BRK). Transisi menjadi intraday bullish order flow.",
+          "new_york_expansion": "New York session akan melanjutkan ekspansi rally naik."
+        },
+        "bearish_reversal": {
+          "setup": "Harga rally ke atas Midnight Open (0:00 EST) menuju Premium H1 PDA antara jam 02:00 - 05:00 EST.",
+          "judas_swing": "Gerakan rally menipu ke atas ini disebut Protraction (Judas Swing) memburu likuiditas (Buy Stops) lalu membentuk London High.",
+          "change_in_state_of_delivery": "M15 candle close di bawah Breaker (-BRK). Transisi menjadi intraday bearish order flow.",
+          "new_york_expansion": "New York session akan melanjutkan ekspansi drop turun."
+        }
+      },
+      "dealing_range": {
+        "bullish": "New York akan memberikan peluang buying di zona retracement yang bergerak turun (kembali) menuju London Reversal Low. Internal M15 - H1 PD Arrays.",
+        "bearish": "New York akan memberikan peluang selling di zona retracement yang bergerak naik (kembali) menuju London Reversal High. Internal M15 - H1 PD Arrays."
+      },
+      "negative_conditions": {
+        "syarat_batal": [
+          "London Reversal kekurangan (lacking) sentuhan/engagement pada H1 PDA.",
+          "New York PM Session akan merilis High-Impact News (FOMC Statement, Federal Funds Rate, dll). Menandakan akan terjadi fase Pre-release consolidation."
+        ]
+      },
+      "days_of_week_anticipation": {
+        "classic_expansion": "Selasa (Tue), Rabu (Wed), Kamis (Thu). Expansion days mengikuti reversal days.",
+        "midweek_reversal": "Rabu (Wed). Potensi terbentuk reversal pada hari Rabu.",
+        "consolidation_reversal": "Kamis (Thu), Jumat (Fri)."
+      },
+      "daily_candle_formation": {
+        "bullish_olhc": "Open (Midnight) -> Low (London Judas Swing) -> High (NY Expansion) -> Close.",
+        "bearish_ohlc": "Open (Midnight) -> High (London Judas Swing) -> Low (NY Expansion) -> Close."
+      }
+    },
+    "daily_profile_new_york_manipulation": {
+      "source": "The Daily Profile Guide: Volume 2 - New York Manipulation",
+      "time_variables_est": {
+        "london_session": "02:00 - 05:00 EST (Continued consolidation range)",
+        "new_york_forex": "07:00 - 10:00 EST (External consolidation manipulation = Expansion)",
+        "new_york_indices": "08:30 - 12:00 EST (External consolidation manipulation = Expansion)",
+        "midnight_open": "00:00 EST (Garis keseimbangan)"
+      },
+      "framework_pd_arrays_ny": {
+        "premium_above_midnight": [
+          "External High / BSL",
+          "Rejection Block (-RB)",
+          "Order Block (-OB)",
+          "Breaker Block (-BRK)",
+          "Fair Value Gap (-FVG)"
+        ],
+        "discount_below_midnight": [
+          "External Low / SSL",
+          "Rejection Block (+RB)",
+          "Order Block (+OB)",
+          "Breaker Block (+BRK)",
+          "Fair Value Gap (+FVG)"
+        ]
+      },
+      "london_consolidation_behavior": {
+        "bullish": "London session tidak membuat reversal tajam ke arah bawah, melainkan tertahan dalam fase konsolidasi stagnan di dekat area Discount H1 PDA.",
+        "bearish": "London session tidak membuat reversal tajam ke arah atas, melainkan tertahan dalam fase konsolidasi stagnan di dekat area Premium H1 PDA."
+      },
+      "new_york_manipulation_patterns": {
+        "bullish_ny_manipulation": {
+          "setup": "Fase London hanya sideway (Consolidation).",
+          "manipulation": "Di awal pembukaan New York, harga dibanting (drop) secara agresif ke bawah menyentuh Consolidation Low & Discount H1 PDA (Confluence).",
+          "expansion": "Gerakan banting ini adalah manipulasi (murni jebakan). Segera setelah menyentuh PD Array, harga ditarik naik membentuk True Expansion."
+        },
+        "bearish_ny_manipulation": {
+          "setup": "Fase London hanya sideway (Consolidation).",
+          "manipulation": "Di awal pembukaan New York, harga diterbangkan (rally) secara agresif ke atas menyentuh Consolidation High & Premium H1 PDA (Confluence).",
+          "expansion": "Gerakan terbang ini adalah jebakan likuiditas (Bull Trap). Segera setelah menyentuh PD Array, harga dibanting turun membentuk True Expansion."
+        }
+      },
+      "entry_range_ny": {
+        "bullish": "Retracement atau pullback pertama pasca 'New York Manipulation Low' (titik manipulasi terendah) adalah golden entry untuk BUY. Manfaatkan internal M1-M15 PD Arrays (Breaker, Order Block, FVG).",
+        "bearish": "Retracement atau pullback pertama pasca 'New York Manipulation High' (titik manipulasi tertinggi) adalah golden entry untuk SELL. Manfaatkan internal M1-M15 PD Arrays (Breaker, Order Block, FVG)."
+      },
+      "negative_conditions": {
+        "syarat_batal": [
+          "Harga langsung breakout dari range konsolidasi tanpa adanya Manipulasi New York terlebih dahulu (Kurangnya tipuan).",
+          "PM Session di New York akan merilis berita berdampak besar (High-Impact News) sehingga market akan dipaksa masuk kembali ke fase konsolidasi (pre-release consolidation)."
+        ]
+      },
+      "economic_calendar_rules": {
+        "waktu_kritis": "8:30 EST (Biasanya ada rilis data High Impact News driver).",
+        "fase_news": "Akumulasi (sebelum rilis) -> Manipulasi (saat rilis) -> Distribusi/Ekspansi (mengejar likuiditas).",
+        "fokus_berita": [
+          "CPI",
+          "NFP",
+          "FOMC",
+          "PCE",
+          "GDP",
+          "PPI"
+        ]
+      },
+      "daily_candle_formation_ny_manipulation": {
+        "bullish_olhc": "Open (Midnight) -> Konsolidasi London -> Low (NY Manipulation) -> High (NY Expansion) -> Close.",
+        "bearish_ohlc": "Open (Midnight) -> Konsolidasi London -> High (NY Manipulation) -> Low (NY Expansion) -> Close."
+      }
+    },
+    "daily_profile_new_york_reversal": {
+      "source": "The Daily Profile Guide: Volume 3 - New York Reversal",
+      "time_variables_est": {
+        "london_session": "02:00 - 05:00 EST (Membentuk Protraction/Manipulasi London awal)",
+        "new_york_forex": "07:00 - 10:00 EST (Membentuk Reversal/Pembalikan arah utama hari itu)",
+        "new_york_indices": "08:30 - 12:00 EST (Membentuk Reversal/Pembalikan arah utama hari itu)",
+        "midnight_open": "00:00 EST (Titik ideal keseimbangan target pullback)"
+      },
+      "framework_pd_arrays_ny_reversal": {
+        "premium_above_midnight": [
+          "External High / BSL",
+          "Rejection Block (-RB)",
+          "Order Block (-OB)",
+          "Breaker Block (-BRK)",
+          "Fair Value Gap (-FVG)"
+        ],
+        "discount_below_midnight": [
+          "External Low / SSL",
+          "Rejection Block (+RB)",
+          "Order Block (+OB)",
+          "Breaker Block (+BRK)",
+          "Fair Value Gap (+FVG)"
+        ]
+      },
+      "new_york_reversal_patterns": {
+        "bullish_ny_reversal": {
+          "setup": "Fase London mencetak tren turun yang konsisten (London Bearish).",
+          "reversal_trigger": "Saat masuk sesi New York, tren turun ini akhirnya menyentuh zona ekstrim Discount H1 PDA.",
+          "expansion": "Sentuhan di H1 PDA ini men-trigger New York Bullish Reversal. Harga berbalik terbang tajam ke atas. Entry Buy divalidasi setelah Breakout ke atas."
+        },
+        "bearish_ny_reversal": {
+          "setup": "Fase London mencetak tren naik yang konsisten (London Bullish).",
+          "reversal_trigger": "Saat masuk sesi New York, tren naik ini akhirnya menabrak zona ekstrim Premium H1 PDA.",
+          "expansion": "Sentuhan di H1 PDA ini men-trigger New York Bearish Reversal. Harga dibanting turun tajam. Entry Sell divalidasi setelah Breakdown ke bawah."
+        }
+      },
+      "entry_range_ny_reversal": {
+        "ideal_buy": "Saat New York Bullish Reversal terjadi, tunggu koreksi (retracement) turun yang menuju kembali ke titik Low pembalikan (NY Reversal Low). Gunakan M1-M15 PD Arrays (Breaker/OB/FVG) sebagai titik pantul. Target naik utama (Daily Draw) idealnya adalah kembali ke harga Midnight Open atau lebih tinggi.",
+        "ideal_sell": "Saat New York Bearish Reversal terjadi, tunggu koreksi (retracement) naik yang menuju kembali ke titik High pembalikan (NY Reversal High). Gunakan M1-M15 PD Arrays (Breaker/OB/FVG) sebagai titik tolak. Target turun utama (Daily Draw) idealnya adalah kembali ke harga Midnight Open atau lebih rendah."
+      },
+      "negative_conditions": {
+        "syarat_batal": [
+          "Harga tidak berhasil menyentuh (lacking engagement) target H1 PDA (Premium/Discount) pada saat sesi New York, yang membuat reversal tidak valid.",
+          "Sesi New York PM (siang-sore) dijadwalkan merilis High-Impact News (FOMC, Rate Decision, dll) yang memicu pre-release consolidation, membunuh momentum reversal."
+        ]
+      },
+      "daily_candle_formation_ny_reversal": {
+        "bullish_olhc": "Open (Midnight) -> Low (NY Reversal menyentuh Discount PDA) -> Expansion naik ke arah Daily Draw -> Close.",
+        "bearish_ohlc": "Open (Midnight) -> High (NY Reversal menyentuh Premium PDA) -> Expansion turun ke arah Daily Draw -> Close."
+      }
+    },
+    "anti_stop_hunt_engine": {
+      "source": "Vinzx System Protocol",
+      "entry_validation_rules": [
+        "JANGAN LANGSUNG ENTRY saat harga menyentuh Order Block / SNR / FVG untuk pertama kalinya. Asumsikan sentuhan pertama adalah Liquidity Sweep.",
+        "TUNGGU konfirmasi Price Action (Pin Bar dengan tail sangat panjang, Engulfing mematikan) atau Change of Character (CHoCH) di Lower Timeframe (M1/M5) sebelum membuka posisi.",
+        "DILARANG entry jika pergerakan (momentum) candle yang mendekati zona terlalu kuat dan besar (Marubozu), tanpa tanda perlambatan."
+      ],
+      "stop_loss_management": [
+        "JANGAN PERNAH menaruh Stop Loss pas di garis ujung sebuah Order Block atau Swing Low/High.",
+        "Stop Loss HARUS ditempatkan BEBERAPA PIPS DI LUAR (di atas/di bawah) titik ekstrem wick yang paling panjang.",
+        "Gunakan perhitungan volatilitas tambahan (ATR Buffer) untuk menentukan jarak aman SL agar selamat dari jarum manipulasi bandar (Stop Hunt)."
+      ],
+      "fakeout_mitigation": [
+        "Jika sebuah sinyal menyentuh SL namun langsung berbalik ke arah Take Profit (TP), tandai area SL tersebut sebagai Liquidity Pool baru.",
+        "Sinyal selanjutnya pada area tersebut harus menunggu sapuan (sweep) pada titik SL yang lama."
+      ]
+    }
+  },
+  "output_format": [
+    "Trend",
+    "Bias",
+    "Market Structure",
+    "Liquidity",
+    "Supply Demand",
+    "SMC",
+    "Volume",
+    "Momentum",
+    "Volatility",
+    "Entry",
+    "Stop Loss",
+    "Take Profit",
+    "Risk Reward",
+    "Confidence Score",
+    "Probability Score",
+    "Reasons (Lengkap, detail, mudah dipahami)",
+    "Alternative Scenario",
+    "Invalidation Scenario",
+    "Trade Management"
+  ],
+  "backtest_mode": {
+    "rules": "Gunakan aturan identik dengan Live Analysis. Jangan melihat candle masa depan. Evaluasi tanpa look-ahead bias.",
+    "metrics_to_calculate": [
+      "Win Rate",
+      "Loss Rate",
+      "Average RR",
+      "Profit Factor",
+      "Drawdown",
+      "Expectancy",
+      "Total Trade",
+      "BUY Accuracy",
+      "SELL Accuracy",
+      "Penyebab Menang/Kalah"
+    ]
+  }
+}

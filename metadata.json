@@ -1,0 +1,6 @@
+{
+  "name": "Vinzx Trade Artificial 😝",
+  "description": "Gen Z style AI Trading assistant using Smart Money Concepts (SMC) for XAUUSD, BTCUSD, and XAGUSD analysis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

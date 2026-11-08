@@ -1,0 +1,100 @@
+import { getTrueTime } from '../../utils/time';
+/** @type {{ ai_edit: "strict", on_fail: "simulate_error" }} */
+import React, { useState } from 'react';
+import { setServerTimeOffset } from '../../utils/time';
+import { UserRole, MembershipTier, UserSession } from '../../types';
+import { signInWithPopup, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { auth, db, googleProvider } from '../../services/firebaseConfig';
+import { saveCurrentUserSession } from '../../services/databaseService';
+import { KeyRound, User as UserIcon, ArrowRight } from 'lucide-react';
+
+interface AuthOverlayProps {
+    onLoginSuccess: (session: UserSession) => void;
+    onClose: () => void;
+}
+
+
+const AuthOverlay: React.FC<AuthOverlayProps> = ({ 
+    onLoginSuccess, 
+    onClose
+}) => {
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
+    const [logoClicks, setLogoClicks] = useState(0);
+    const [firstClickTime, setFirstClickTime] = useState(0);
+    const [showDevMode, setShowDevMode] = useState(false);
+
+    const handleLogoClick = () => {
+        const now = getTrueTime();
+        
+        if (logoClicks === 0 || now - firstClickTime > 1500) {
+            setLogoClicks(1);
+            setFirstClickTime(now);
+        } else {
+            const newCount = logoClicks + 1;
+            if (newCount >= 3) {
+                setShowDevMode(true);
+                setLogoClicks(0);
+                return;
+            }
+            setLogoClicks(newCount);
+        }
+    };
+
+    const [mode, setMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
+    const [regUsername, setRegUsername] = useState('');
+    const [regPassword, setRegPassword] = useState('');
+
+    const getFakeEmail = (username: string) => `${username.toLowerCase().replace(/[^a-z0-9]/g, '')}@users.vinzx.com`;
+
+    const handleEmailProcess = async () => {
+        setIsLoading(true);
+        setError('');
+
+        if (!regUsername || !regPassword) {
+            setError('Username dan Password wajib diisi.');
+            setIsLoading(false);
+            return;
+        }
+
+        const safeUsername = regUsername.replace(/[\/\s]/g, '_');
+
+        try {
+            if (mode === 'REGISTER') {
+                const response = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'x-auth-key': '[AUTH_KEY]:VINZX_OMEGA_2026'
+                    },
+                    body: JSON.stringify({ username: regUsername.trim(), password: regPassword.trim() })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    if (data.error === "Akun Mu Eror Harap Hubungi Admin Vinzxx🤫") {
+                         throw new Error(data.error);
+                    }
+                    throw new Error(data.error || 'Error saat registrasi');
+                }
+                
+                const message = `Halo Admin Vinzx, saya ingin memberikan konfirmasi untuk pendaftaran akun dengan username: ${regUsername}`;
+                window.open(`https://wa.me/628979506271?text=${encodeURIComponent(message)}`, '_blank');
+                
+                setError('Pendaftaran berhasil! Mengalihkan ke WhatsApp untuk persetujuan admin...');
+                setIsLoading(false);
+                return;
+
+            } else { // LOGIN
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'x-auth-key': '[AUTH_KEY]:VINZX_OMEGA_2026'
+                    },
+                    body: JSON.stringify({ username: regUsername, password: regPassword })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {

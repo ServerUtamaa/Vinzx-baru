@@ -1,0 +1,1 @@
+fetch('http://localhost:3000/api/yahoo?symbol=EURUSD=X&interval=1m&range=1d').then(r => r.json()).then(data => console.log(data.chart.result[0].timestamp ? 'has timestamp' : 'no timestamp')).catch(console.error);

@@ -1,0 +1,22 @@
+{
+  "collections": [
+    {
+      "name": "users",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "username": { "type": "string" },
+          "email": { "type": "string" },
+          "role": { "type": "string" },
+          "tokens": { "type": "number" },
+          "membershipTier": { "type": "string" },
+          "membershipExpiresAt": { "type": "number" },
+          "createdAt": { "type": "number" },
+          "lastLogin": { "type": "number" }
+        },
+        "required": ["id", "username"]
+      }
+    }
+  ]
+}

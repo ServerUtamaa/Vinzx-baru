@@ -1,0 +1,11 @@
+--- .core/backend/server.js
++++ .core/backend/server.js
+@@ -370,6 +370,10 @@
+         res.json({ success: true, user, serverTime: Date.now() });
+     });
+ 
++    app.get('/api/time', (req, res) => {
++        res.json({ serverTime: Date.now() });
++    });
++
+     app.get('/api/yahoo', async (req, res) => {
