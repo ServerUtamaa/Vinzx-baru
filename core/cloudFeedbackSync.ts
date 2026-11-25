@@ -1,17 +1,17 @@
 import { getTrueTime } from '../utils/time';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../services/firebaseConfig';
-import { getDeviceId } from '../services/deviceService';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { db, auth } from '../services/firebaseConfig';
 
 const GLOBAL_AI_DOC = 'ai_memory/global_state';
 
 // Fire-and-forget sync function
 export const syncToCloud = async (key: string, data: any) => {
     try {
+        if (!auth.currentUser) return; // Only sync to cloud if authenticated
         const ref = doc(db, GLOBAL_AI_DOC);
         await setDoc(ref, { [key]: data, lastUpdated: getTrueTime() }, { merge: true });
-    } catch(e) {
-        console.error("Failed to sync AI memory to cloud", e);
+    } catch(e: any) {
+        console.warn("AI Cloud Memory sync deferred:", e?.message || e);
     }
 };
 
@@ -27,7 +27,7 @@ export const loadFromCloud = async () => {
             if (data['X12_REINFORCEMENT']) localStorage.setItem('X12_REINFORCEMENT', JSON.stringify(data['X12_REINFORCEMENT']));
             console.log("AI Memory successfully loaded from Quantum Cloud (1-Year Persistence).");
         }
-    } catch (e) {
-        console.error("Failed to load AI memory from cloud", e);
+    } catch (e: any) {
+        console.warn("AI Cloud Memory fallback to local storage:", e?.message || e);
     }
 };

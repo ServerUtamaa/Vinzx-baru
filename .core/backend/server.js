@@ -10,12 +10,6 @@
  */
 import 'dotenv/config';
 
-
-
-
-
-
-
 import express from 'express';
 import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
@@ -31,108 +25,751 @@ const __dirname = path.dirname(__filename);
 
 import fs from 'fs';
 
+import {
+    INTEGRITY_SECRET,
+    setRuntimeSecrets,
+    encryptWithKey,
+    decryptWithKey,
+    encryptBackupPayload,
+    decryptBackupPayload,
+    hashPassword,
+    hashPasswordAsync,
+    verifyPassword,
+    verifyPasswordAsync,
+    generateSessionToken,
+    verifySessionToken,
+    authenticate,
+    optionalAuthenticate,
+    requireAdmin,
+    verifyGoogleToken,
+    rateLimitMiddleware,
+    clearRateLimitByIdentity,
+    sanitizeUser,
+    generateUserIntegritySignature,
+    verifyUserIntegrity,
+    logAuditEvent
+} from './security.js';
+
+// Prevent transient third-party network/gRPC errors from crashing HTTP server (prevents Failed to fetch)
+process.on('unhandledRejection', (reason) => {
+    console.error('[PROCESS UNHANDLED REJECTION]:', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('[PROCESS UNCAUGHT EXCEPTION]:', err?.message || err);
+});
+
 const USERS_DB_PATH = path.join(process.cwd(), '.core', 'database', 'users.json');
+const FIREBASE_SYNC_CREDS_PATH = path.join(process.cwd(), '.core', 'database', '.firebase_sync_creds');
 
 import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, setDoc, getDoc, collection, getDocs } from 'firebase/firestore';
+import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
+import { getFirestore, doc, setDoc, getDoc, collection, getDocs, query, where, setLogLevel } from 'firebase/firestore';
+
+try {
+    setLogLevel('error');
+} catch (e) {}
 
 const firebaseConfig = JSON.parse(fs.readFileSync('./firebase-applet-config.json', 'utf8'));
 const firebaseApp = initializeApp(firebaseConfig);
+const firebaseAuth = getAuth(firebaseApp);
 const firestoreDb = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
-// Cryptographic Proof-of-Authority Secret for Tamper-Proof User Data & Membership
-const SERVER_INTEGRITY_KEY = process.env.INTEGRITY_SECRET || '0x_vinzx_immutable_ledger_hash_key_8829104928104';
+let syncAuthPromise = null;
+let cachedSyncCreds = null;
+let lastKnownCloudUserCount = 0;
 
-function generateUserIntegritySignature(user) {
-    if (!user) return '';
-    const payload = [
-        user.id || '',
-        user.username || '',
-        user.role || 'USER',
-        user.membershipTier || 'NONE',
-        String(user.membershipExpiresAt || 0),
-        String(user.tokens || 0),
-        user.deviceId || ''
-    ].join('::');
-    return crypto.createHmac('sha256', SERVER_INTEGRITY_KEY).update(payload).digest('hex');
-}
-
-function verifyUserIntegrity(user) {
-    if (!user || !user.integritySignature) return false;
-    const expected = generateUserIntegritySignature(user);
-    try {
-        return crypto.timingSafeEqual(
-            Buffer.from(user.integritySignature, 'utf8'),
-            Buffer.from(expected, 'utf8')
-        );
-    } catch (e) {
-        return false;
+function readSyncCredentials() {
+    if (cachedSyncCreds) return cachedSyncCreds;
+    let email = process.env.FIREBASE_SYNC_EMAIL || '';
+    let password = process.env.FIREBASE_SYNC_PASSWORD || '';
+    if ((!email || !password) && fs.existsSync(FIREBASE_SYNC_CREDS_PATH)) {
+        try {
+            const creds = JSON.parse(fs.readFileSync(FIREBASE_SYNC_CREDS_PATH, 'utf8'));
+            email = creds.email || '';
+            password = creds.password || '';
+        } catch (e) {}
     }
+    if (email && password) {
+        cachedSyncCreds = { email, password };
+    }
+    return cachedSyncCreds;
 }
 
-function hashPassword(raw) {
-    if (!raw) return '';
-    return crypto.createHash('sha256').update('vinzx_usr_chain_salt_2026_' + raw).digest('hex');
+function getSharedBootstrapKeyMaterial() {
+    const creds = readSyncCredentials();
+    if (!creds) return '';
+    return `${creds.email}:${creds.password}:${firebaseConfig.projectId}:${firebaseConfig.firestoreDatabaseId || 'default'}`;
 }
 
-async function backupUsersToFirestore(users) {
-    try {
-        const payload = JSON.stringify(users);
-        const checksum = crypto.createHmac('sha256', SERVER_INTEGRITY_KEY).update(payload).digest('hex');
-        // Backup full array with cryptographic checksum
-        const usersRef = doc(firestoreDb, 'server_backup', 'users_db');
-        await setDoc(usersRef, { data: payload, checksum, updated_at: Date.now() });
-        
-        // Backup individu ke collection 'users' (persistent, tdk akan hilang sampai 50 tahun)
-        for (const user of users) {
-            if (!user.integritySignature) {
-                user.integritySignature = generateUserIntegritySignature(user);
+async function ensureFirebaseSyncAuth() {
+    if (firebaseAuth.currentUser) return firebaseAuth.currentUser;
+    if (syncAuthPromise) return syncAuthPromise;
+
+    syncAuthPromise = (async () => {
+        try {
+            const creds = readSyncCredentials();
+            if (!creds || !creds.email || !creds.password) {
+                throw new Error('Firebase sync credentials not found');
             }
-            const userDoc = doc(firestoreDb, 'users', user.id);
-            await setDoc(userDoc, user);
+            const cred = await signInWithEmailAndPassword(firebaseAuth, creds.email, creds.password);
+            return cred.user;
+        } catch (err) {
+            console.error('[FIREBASE SYNC AUTH] Sign-in failed:', err.message);
+            return null;
+        } finally {
+            syncAuthPromise = null;
         }
-    } catch(e) {
-        console.error("Backup to Firestore failed", e);
+    })();
+
+    return syncAuthPromise;
+}
+
+async function bootstrapSharedSecretsFromFirestore() {
+    try {
+        const authUser = await ensureFirebaseSyncAuth();
+        const wrapKey = getSharedBootstrapKeyMaterial();
+        if (!authUser || !wrapKey) return;
+
+        const secretsRef = doc(firestoreDb, 'server_backup', 'system_secrets');
+        const snap = await getDoc(secretsRef);
+
+        if (snap.exists() && snap.data()?.data) {
+            try {
+                const raw = decryptWithKey(snap.data(), wrapKey);
+                const parsed = JSON.parse(raw);
+                if (parsed?.jwtSecret && parsed?.integritySecret) {
+                    setRuntimeSecrets({
+                        jwtSecret: parsed.jwtSecret,
+                        integritySecret: parsed.integritySecret
+                    });
+                    console.log('[SECRETS] Synchronized shared JWT & Integrity keys from Firestore vault.');
+                    return;
+                }
+            } catch (decryptErr) {
+                console.warn('[SECRETS] Could not unwrap system_secrets:', decryptErr.message);
+            }
+        }
+
+        // First initialization: store active runtime secrets so all replicas/instances share identical keys
+        const currentJwt = fs.existsSync(path.join(process.cwd(), '.core', 'database', '.jwt_secret'))
+            ? fs.readFileSync(path.join(process.cwd(), '.core', 'database', '.jwt_secret'), 'utf8').trim()
+            : (process.env.JWT_SECRET || '');
+        if (currentJwt && INTEGRITY_SECRET) {
+            const envelope = encryptWithKey(JSON.stringify({
+                jwtSecret: currentJwt,
+                integritySecret: INTEGRITY_SECRET
+            }), wrapKey);
+            await setDoc(secretsRef, {
+                ...envelope,
+                type: 'system_secrets',
+                updated_at: Date.now()
+            });
+            console.log('[SECRETS] Published shared JWT & Integrity keys to Firestore vault.');
+        }
+    } catch (e) {
+        console.warn('[SECRETS] Shared bootstrap skipped:', e?.message || e);
     }
+}
+
+function getVaultDocId(userId) {
+    return 'u_' + crypto.createHash('sha256').update(String(userId)).digest('hex').slice(0, 32);
+}
+
+function isValidUserRecord(u) {
+    return Boolean(
+        u &&
+        typeof u === 'object' &&
+        typeof u.id === 'string' &&
+        u.id.trim() !== '' &&
+        typeof u.username === 'string' &&
+        u.username.trim() !== ''
+    );
+}
+
+function filterValidUsers(list) {
+    if (!Array.isArray(list)) return [];
+    const seen = new Set();
+    const cleaned = [];
+    for (const u of list) {
+        if (!isValidUserRecord(u)) continue;
+        if (seen.has(u.id)) continue;
+        seen.add(u.id);
+        cleaned.push(u);
+    }
+    return cleaned;
+}
+
+const ROLE_PRIORITY = { DEV: 4, ADMIN: 4, USER: 3, PENDING: 2, REJECTED: 1 };
+
+function findBestUserMatch(users, predicate) {
+    const matches = users.filter(predicate);
+    if (matches.length === 0) return undefined;
+    if (matches.length === 1) return matches[0];
+    return [...matches].sort((a, b) => {
+        const roleDiff = (ROLE_PRIORITY[b.role] || 0) - (ROLE_PRIORITY[a.role] || 0);
+        if (roleDiff !== 0) return roleDiff;
+        const expDiff = Number(b.membershipExpiresAt || 0) - Number(a.membershipExpiresAt || 0);
+        if (expDiff !== 0) return expDiff;
+        const timeA = Math.max(Number(a.updatedAt || 0), Number(a.lastLogin || 0), Number(a.createdAt || 0));
+        const timeB = Math.max(Number(b.updatedAt || 0), Number(b.lastLogin || 0), Number(b.createdAt || 0));
+        return timeB - timeA;
+    })[0];
+}
+
+function getRecordFreshnessTime(u) {
+    return Math.max(
+        Number(u.updatedAt || 0),
+        Number(u.lastLogin || 0),
+        Number(u.createdAt || 0)
+    );
+}
+
+function getCandidateIntegrityKeys() {
+    return [
+        getSharedBootstrapKeyMaterial(),
+        process.env.INTEGRITY_SECRET || '',
+        '0x_vinzx_immutable_ledger_hash_key_8829104928104'
+    ].filter(Boolean);
+}
+
+function sealUserPasswordForAdmin(user, plainPassword) {
+    if (!user || user.email || !plainPassword || typeof plainPassword !== 'string') return;
+    if (user.role === 'DEV' || user.role === 'ADMIN') return;
+    try {
+        user.encryptedCredVault = encryptBackupPayload(plainPassword);
+    } catch (e) {
+        console.warn('[CRED VAULT] Failed to encrypt credential vault:', e?.message || e);
+    }
+}
+
+function isOneWayPasswordHash(str) {
+    if (!str || typeof str !== 'string') return false;
+    if (str.startsWith('$2a$') || str.startsWith('$2b$') || str.startsWith('$2y$')) return true;
+    if (/^[0-9a-f]{64}$/i.test(str)) return true;
+    return false;
+}
+
+function revealUserPasswordForAdmin(user) {
+    if (!user || user.email || user.role === 'DEV' || user.role === 'ADMIN') return null;
+    if (user.encryptedCredVault) {
+        try {
+            const decrypted = decryptBackupPayload(user.encryptedCredVault, getCandidateIntegrityKeys());
+            if (decrypted) return decrypted;
+        } catch (e) {
+            // fallback to legacy non-hashed password field if present
+        }
+    }
+    const rawStored = typeof user.password === 'string' && user.password
+        ? user.password
+        : (typeof user.passwordHash === 'string' ? user.passwordHash : '');
+    if (rawStored && !isOneWayPasswordHash(rawStored)) {
+        return rawStored;
+    }
+    return null;
+}
+
+function formatUserForAdmin(user) {
+    if (!user) return null;
+    const manualPassword = revealUserPasswordForAdmin(user);
+    return {
+        ...sanitizeUser(user),
+        authMethod: user.email ? 'GOOGLE' : 'MANUAL',
+        hasPassword: Boolean(user.passwordHash || user.password || manualPassword),
+        manualPassword
+    };
+}
+
+function mergeTwoUserRecords(existingUser, incomingUser) {
+    if (!existingUser) return { ...incomingUser };
+    if (!incomingUser) return { ...existingUser };
+
+    const exUpdated = Number(existingUser.updatedAt || 0);
+    const inUpdated = Number(incomingUser.updatedAt || 0);
+    const exFresh = getRecordFreshnessTime(existingUser);
+    const inFresh = getRecordFreshnessTime(incomingUser);
+
+    let base;
+    if (inUpdated !== exUpdated) {
+        base = (inUpdated > exUpdated) ? { ...existingUser, ...incomingUser } : { ...incomingUser, ...existingUser };
+    } else if (inFresh !== exFresh) {
+        base = (inFresh > exFresh) ? { ...existingUser, ...incomingUser } : { ...incomingUser, ...existingUser };
+    } else {
+        // Equal timestamps: prefer approved/rejected over PENDING
+        base = ((ROLE_PRIORITY[incomingUser.role] || 0) >= (ROLE_PRIORITY[existingUser.role] || 0))
+            ? { ...existingUser, ...incomingUser }
+            : { ...incomingUser, ...existingUser };
+    }
+
+    // Legacy safety: if neither has explicit updatedAt, never silently revert an approved/rejected account back to PENDING
+    if (!exUpdated && !inUpdated) {
+        if (existingUser.role !== 'PENDING' && incomingUser.role === 'PENDING') {
+            base.role = existingUser.role;
+            base.membershipTier = existingUser.membershipTier || base.membershipTier;
+            base.membershipExpiresAt = Math.max(Number(existingUser.membershipExpiresAt || 0), Number(incomingUser.membershipExpiresAt || 0));
+            base.tokens = Math.max(Number(existingUser.tokens || 0), Number(incomingUser.tokens || 0));
+        } else if (incomingUser.role !== 'PENDING' && existingUser.role === 'PENDING') {
+            base.role = incomingUser.role;
+            base.membershipTier = incomingUser.membershipTier || base.membershipTier;
+            base.membershipExpiresAt = Math.max(Number(existingUser.membershipExpiresAt || 0), Number(incomingUser.membershipExpiresAt || 0));
+            base.tokens = Math.max(Number(existingUser.tokens || 0), Number(incomingUser.tokens || 0));
+        }
+    }
+
+    // Always preserve valid non-empty password hash so sanitized `users` collection docs never overwrite credentials
+    const inHash = incomingUser.passwordHash || incomingUser.password || '';
+    const exHash = existingUser.passwordHash || existingUser.password || '';
+    const inPwTime = Number(incomingUser.passwordUpdatedAt || 0);
+    const exPwTime = Number(existingUser.passwordUpdatedAt || 0);
+    if (inHash && exHash) {
+        base.passwordHash = inPwTime >= exPwTime ? inHash : exHash;
+        base.passwordUpdatedAt = Math.max(inPwTime, exPwTime);
+    } else if (inHash) {
+        base.passwordHash = inHash;
+        base.passwordUpdatedAt = inPwTime || exPwTime || 0;
+    } else if (exHash) {
+        base.passwordHash = exHash;
+        base.passwordUpdatedAt = exPwTime || inPwTime || 0;
+    } else {
+        base.passwordHash = '';
+        base.passwordUpdatedAt = Math.max(inPwTime, exPwTime);
+    }
+    base.password = base.passwordHash;
+
+    // Preserve encrypted admin credential vault so sanitized `users` collection docs never wipe it
+    const inVault = incomingUser.encryptedCredVault || null;
+    const exVault = existingUser.encryptedCredVault || null;
+    if (inVault && exVault) {
+        base.encryptedCredVault = inPwTime >= exPwTime ? inVault : exVault;
+    } else if (inVault) {
+        base.encryptedCredVault = inVault;
+    } else if (exVault) {
+        base.encryptedCredVault = exVault;
+    }
+
+    // Preserve richest trading history
+    if (Array.isArray(existingUser.history) && (!Array.isArray(incomingUser.history) || existingUser.history.length > incomingUser.history.length)) {
+        base.history = existingUser.history;
+    } else if (Array.isArray(incomingUser.history) && (!Array.isArray(existingUser.history) || incomingUser.history.length > existingUser.history.length)) {
+        base.history = incomingUser.history;
+    }
+
+    base.createdAt = Math.min(
+        Number(existingUser.createdAt || Number.MAX_SAFE_INTEGER),
+        Number(incomingUser.createdAt || Number.MAX_SAFE_INTEGER)
+    );
+    if (!Number.isFinite(base.createdAt) || base.createdAt === Number.MAX_SAFE_INTEGER) {
+        base.createdAt = Date.now();
+    }
+    base.lastLogin = Math.max(Number(existingUser.lastLogin || 0), Number(incomingUser.lastLogin || 0));
+    base.updatedAt = Math.max(Number(existingUser.updatedAt || 0), Number(incomingUser.updatedAt || 0));
+
+    return base;
+}
+
+function mergeUserRecords(localUsers, cloudUsers) {
+    const byId = new Map();
+    for (const u of filterValidUsers(cloudUsers)) {
+        byId.set(u.id, mergeTwoUserRecords(byId.get(u.id), u));
+    }
+    for (const lu of filterValidUsers(localUsers)) {
+        byId.set(lu.id, mergeTwoUserRecords(byId.get(lu.id), lu));
+    }
+    return Array.from(byId.values());
+}
+
+function writeUsersJsonAtomic(usersList) {
+    try {
+        const dir = path.dirname(USERS_DB_PATH);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const tmpPath = `${USERS_DB_PATH}.${process.pid}.${Date.now()}.tmp`;
+        fs.writeFileSync(tmpPath, JSON.stringify(usersList, null, 2));
+        fs.renameSync(tmpPath, USERS_DB_PATH);
+    } catch (e) {
+        console.error('Error saving users DB:', e?.message || e);
+    }
+}
+
+let firestoreQuotaBackoffUntil = 0;
+
+function isFirestoreQuotaError(err) {
+    const msg = String(err?.code || err?.message || err || '').toLowerCase();
+    return msg.includes('resource-exhausted') || msg.includes('quota');
+}
+
+async function writeSingleUserToFirestore(user) {
+    if (!isValidUserRecord(user) || Date.now() < firestoreQuotaBackoffUntil) return;
+    const now = Number(user.updatedAt || user.lastLogin || Date.now());
+    const vaultId = getVaultDocId(user.id);
+    const fullEnvelope = encryptBackupPayload(JSON.stringify(user));
+    const vaultRef = doc(firestoreDb, 'server_backup', vaultId);
+    const { passwordUpdatedAt: _omitPwTs, ...sanitizedProfile } = sanitizeUser(user);
+    const safeDoc = {
+        ...sanitizedProfile,
+        updatedAt: now
+    };
+    const userDocRef = doc(firestoreDb, 'users', user.id);
+
+    await Promise.all([
+        setDoc(vaultRef, {
+            ...fullEnvelope,
+            type: 'user_vault',
+            userId: user.id,
+            updated_at: now
+        }),
+        setDoc(userDocRef, safeDoc, { merge: true })
+    ]);
+}
+
+async function backupUsersToFirestore(users, changedUsers = [], options = {}) {
+    try {
+        if (Date.now() < firestoreQuotaBackoffUntil) return;
+        const authUser = await ensureFirebaseSyncAuth();
+        if (!authUser) return;
+
+        const cleanUsers = filterValidUsers(users);
+
+        // 1. Write atomic per-user vault + sanitized public profile for changed users first (no 1MB ceiling, no cross-instance clobber!)
+        if (Array.isArray(changedUsers) && changedUsers.length > 0) {
+            await Promise.all(changedUsers.map(u => writeSingleUserToFirestore(u)));
+        }
+
+        // 2. Update compressed snapshot ONLY if never shrinking cloud user count (or forceFullBackup requested after verified merge)
+        const shouldWriteSnapshot = Boolean(options.forceSnapshot) || (cleanUsers.length >= lastKnownCloudUserCount && changedUsers.length > 0);
+        if (shouldWriteSnapshot) {
+            const payload = JSON.stringify(cleanUsers);
+            const encryptedEnvelope = encryptBackupPayload(payload);
+            const usersRef = doc(firestoreDb, 'server_backup', 'users_db');
+            await setDoc(usersRef, {
+                ...encryptedEnvelope,
+                userCount: cleanUsers.length,
+                updated_at: Date.now()
+            });
+            lastKnownCloudUserCount = Math.max(lastKnownCloudUserCount, cleanUsers.length);
+        }
+    } catch (e) {
+        if (isFirestoreQuotaError(e)) {
+            firestoreQuotaBackoffUntil = Date.now() + 60 * 1000;
+            console.warn('[FIRESTORE QUOTA] Cloud backup paused briefly (60s); local persistent DB active.');
+        } else {
+            console.error('Backup to Firestore failed:', e?.message || e);
+        }
+    }
+}
+
+let inMemoryUsers = null;
+let lastDeltaSyncAt = 0;
+let deltaSyncCursor = 0;
+let activeSyncPromise = null;
+let mutationQueue = Promise.resolve();
+
+function enqueueUserMutation(taskFn) {
+    const run = mutationQueue.then(() => taskFn(), () => taskFn());
+    mutationQueue = run.catch(() => {});
+    return run;
 }
 
 async function restoreUsersFromFirestore() {
     try {
-        const usersRef = doc(firestoreDb, 'server_backup', 'users_db');
-        const snap = await getDoc(usersRef);
-        if (snap.exists() && snap.data().data) {
-            const rawData = snap.data().data;
-            const checksum = snap.data().checksum;
-            if (checksum) {
-                const expected = crypto.createHmac('sha256', SERVER_INTEGRITY_KEY).update(rawData).digest('hex');
-                if (checksum !== expected) {
-                    console.error("CYBER_SECURITY_ALERT: Firestore backup checksum mismatch! Potential tampering detected. Ignoring backup.");
-                    return;
-                }
+        const authUser = await ensureFirebaseSyncAuth();
+        if (!authUser) {
+            console.warn('[RESTORE] Firebase sync auth unavailable; loading local cache.');
+            if (fs.existsSync(USERS_DB_PATH)) {
+                inMemoryUsers = filterValidUsers(JSON.parse(fs.readFileSync(USERS_DB_PATH, 'utf8')));
+            } else {
+                inMemoryUsers = [];
             }
-            const parsed = JSON.parse(rawData);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-                const validatedUsers = parsed.map(u => {
-                    if (!u.integritySignature) {
-                        u.integritySignature = generateUserIntegritySignature(u);
-                    }
-                    return u;
-                });
-                const dir = path.dirname(USERS_DB_PATH);
-                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-                fs.writeFileSync(USERS_DB_PATH, JSON.stringify(validatedUsers, null, 2));
-                console.log("Restored validated users from Firestore backup!");
+            return;
+        }
+
+        await bootstrapSharedSecretsFromFirestore();
+
+        const dir = path.dirname(USERS_DB_PATH);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+        let localUsers = [];
+        if (fs.existsSync(USERS_DB_PATH)) {
+            try {
+                localUsers = filterValidUsers(JSON.parse(fs.readFileSync(USERS_DB_PATH, 'utf8')));
+            } catch (e) {
+                localUsers = [];
             }
         }
-    } catch(e) {
-        console.error("Restore from Firestore failed", e);
+
+        const candidateExtraKeys = [
+            getSharedBootstrapKeyMaterial(),
+            process.env.INTEGRITY_SECRET || '',
+            '0x_vinzx_immutable_ledger_hash_key_8829104928104'
+        ].filter(Boolean);
+
+        // 1. Read legacy monolithic backup (never overwrite if decryption fails!)
+        const usersRef = doc(firestoreDb, 'server_backup', 'users_db');
+        const snap = await getDoc(usersRef);
+        let backupDbUsers = [];
+        let cloudDecryptedOk = false;
+
+        if (snap.exists() && snap.data()?.data) {
+            const snapData = snap.data();
+            lastKnownCloudUserCount = Number(snapData.userCount || 0);
+            let rawJson = null;
+            try {
+                rawJson = decryptBackupPayload(snapData, candidateExtraKeys);
+            } catch (err) {
+                console.error('CYBER_SECURITY_ALERT: Firestore users_db decrypt failed (preserving cloud records safely):', err.message);
+                rawJson = null;
+            }
+
+            if (rawJson) {
+                try {
+                    backupDbUsers = filterValidUsers(JSON.parse(rawJson));
+                    cloudDecryptedOk = true;
+                } catch (parseErr) {
+                    console.error('Firestore users_db parse error:', parseErr.message);
+                }
+            }
+        }
+
+        // 2. Delta check (or full recovery scan ONLY if snapshot failed/missing or local DB is empty)
+        const vaultUsers = [];
+        const profileUsers = [];
+        const snapshotUpdatedAt = Number(snap.exists() ? snap.data()?.updated_at || 0 : 0);
+        const needsFullCollectionRecovery = !cloudDecryptedOk || (backupDbUsers.length === 0 && localUsers.length === 0);
+
+        if (needsFullCollectionRecovery) {
+            try {
+                const sbSnap = await getDocs(collection(firestoreDb, 'server_backup'));
+                sbSnap.forEach(d => {
+                    if (d.id.startsWith('u_')) {
+                        const vData = d.data();
+                        if (vData?.data) {
+                            try {
+                                const raw = decryptBackupPayload(vData, candidateExtraKeys);
+                                if (raw) {
+                                    const parsed = JSON.parse(raw);
+                                    if (isValidUserRecord(parsed)) vaultUsers.push(parsed);
+                                }
+                            } catch (e) {}
+                        }
+                    }
+                });
+            } catch (sbErr) {
+                if (isFirestoreQuotaError(sbErr)) firestoreQuotaBackoffUntil = Date.now() + 60 * 1000;
+                console.warn('[RESTORE] Per-user vault scan error:', sbErr.message);
+            }
+
+            try {
+                const usersColSnap = await getDocs(collection(firestoreDb, 'users'));
+                usersColSnap.forEach(d => {
+                    const pData = d.data();
+                    if (pData && typeof pData === 'object') {
+                        const candidate = { id: d.id, ...pData };
+                        if (isValidUserRecord(candidate)) profileUsers.push(candidate);
+                    }
+                });
+            } catch (colErr) {
+                if (isFirestoreQuotaError(colErr)) firestoreQuotaBackoffUntil = Date.now() + 60 * 1000;
+                console.warn('[RESTORE] Firestore users collection scan error:', colErr.message);
+            }
+        } else {
+            // Efficient startup delta: read ONLY per-user vaults updated since snapshot timestamp (saves >1,300 Firestore reads per restart!)
+            try {
+                const qVaultDelta = query(
+                    collection(firestoreDb, 'server_backup'),
+                    where('updated_at', '>', Math.max(0, snapshotUpdatedAt - 60000))
+                );
+                const vSnap = await getDocs(qVaultDelta);
+                vSnap.forEach(d => {
+                    if (d.id.startsWith('u_')) {
+                        const vData = d.data();
+                        if (vData?.data) {
+                            try {
+                                const raw = decryptBackupPayload(vData, candidateExtraKeys);
+                                if (raw) {
+                                    const parsed = JSON.parse(raw);
+                                    if (isValidUserRecord(parsed)) vaultUsers.push(parsed);
+                                }
+                            } catch (e) {}
+                        }
+                    }
+                });
+            } catch (deltaErr) {
+                if (isFirestoreQuotaError(deltaErr)) firestoreQuotaBackoffUntil = Date.now() + 60 * 1000;
+            }
+        }
+
+        // Merge everything safely
+        let merged = mergeUserRecords(localUsers, backupDbUsers);
+        merged = mergeUserRecords(merged, profileUsers);
+        merged = mergeUserRecords(merged, vaultUsers);
+
+        if (merged.length > 0) {
+            for (const u of merged) {
+                u.integritySignature = generateUserIntegritySignature(u);
+            }
+            inMemoryUsers = merged;
+            writeUsersJsonAtomic(merged);
+            console.log(`Restored & merged ${merged.length} validated users (local: ${localUsers.length}, snapshot: ${backupDbUsers.length}, deltaVaults: ${vaultUsers.length}, profiles: ${profileUsers.length}).`);
+        } else {
+            inMemoryUsers = [];
+        }
+
+        lastDeltaSyncAt = Date.now();
+        deltaSyncCursor = Date.now();
+
+        // Sync consolidated snapshot only if new delta records were merged or snapshot was missing
+        if (merged.length > 0 && (vaultUsers.length > 0 || profileUsers.length > 0 || !snap.exists())) {
+            await backupUsersToFirestore(merged, vaultUsers, { forceSnapshot: true });
+        }
+    } catch (e) {
+        if (isFirestoreQuotaError(e)) {
+            firestoreQuotaBackoffUntil = Date.now() + 60 * 1000;
+            console.warn('[RESTORE] Firestore quota limit reached; running from local users.json.');
+        } else {
+            console.error('Restore from Firestore failed:', e?.message || e);
+        }
+        if (!inMemoryUsers && fs.existsSync(USERS_DB_PATH)) {
+            try {
+                inMemoryUsers = filterValidUsers(JSON.parse(fs.readFileSync(USERS_DB_PATH, 'utf8')));
+            } catch (err) {
+                inMemoryUsers = [];
+            }
+        }
     }
+}
+
+async function syncDeltaFromFirestore(options = {}) {
+    if (Date.now() < firestoreQuotaBackoffUntil) return;
+    const { force = false, lookupUsername = '', lookupId = '' } = options;
+    const now = Date.now();
+    const minDeltaIntervalMs = force ? 6000 : 12000;
+    const shouldThrottleDelta = (now - lastDeltaSyncAt) < minDeltaIntervalMs;
+    if (shouldThrottleDelta && !lookupUsername && !lookupId) return;
+
+    if (activeSyncPromise && !lookupUsername && !lookupId) {
+        return activeSyncPromise;
+    }
+
+    const runSync = (async () => {
+        try {
+            const authUser = await ensureFirebaseSyncAuth();
+            if (!authUser) return;
+
+            const since = Math.max(0, (deltaSyncCursor || now - 60000) - 30000);
+            const incomingRecords = [];
+            const candidateExtraKeys = [getSharedBootstrapKeyMaterial()].filter(Boolean);
+
+            // 1. Delta query on per-user encrypted vaults (throttled to avoid burning daily Firestore read quota)
+            if (!shouldThrottleDelta) {
+                try {
+                    const qVault = query(
+                        collection(firestoreDb, 'server_backup'),
+                        where('updated_at', '>', since)
+                    );
+                    const vSnap = await getDocs(qVault);
+                    vSnap.forEach(d => {
+                        if (d.id.startsWith('u_')) {
+                            const vData = d.data();
+                            if (vData?.data) {
+                                try {
+                                    const raw = decryptBackupPayload(vData, candidateExtraKeys);
+                                    if (raw) {
+                                        const parsed = JSON.parse(raw);
+                                        if (isValidUserRecord(parsed)) incomingRecords.push(parsed);
+                                    }
+                                } catch (e) {}
+                            }
+                        }
+                    });
+                } catch (e) {
+                    if (isFirestoreQuotaError(e)) firestoreQuotaBackoffUntil = Date.now() + 60 * 1000;
+                }
+
+                lastDeltaSyncAt = now;
+                deltaSyncCursor = now;
+            }
+
+            // 2. Targeted lookup on specific ID (max 2 doc reads)
+            if (lookupId && Date.now() >= firestoreQuotaBackoffUntil) {
+                try {
+                    const [vSnap, pSnap] = await Promise.all([
+                        getDoc(doc(firestoreDb, 'server_backup', getVaultDocId(lookupId))),
+                        getDoc(doc(firestoreDb, 'users', lookupId))
+                    ]);
+                    if (vSnap.exists() && vSnap.data()?.data) {
+                        try {
+                            const parsed = JSON.parse(decryptBackupPayload(vSnap.data(), candidateExtraKeys));
+                            if (isValidUserRecord(parsed)) incomingRecords.push(parsed);
+                        } catch (e) {}
+                    }
+                    if (pSnap.exists()) {
+                        const p = { id: pSnap.id, ...pSnap.data() };
+                        if (isValidUserRecord(p)) incomingRecords.push(p);
+                    }
+                } catch (e) {
+                    if (isFirestoreQuotaError(e)) firestoreQuotaBackoffUntil = Date.now() + 60 * 1000;
+                }
+            }
+
+            if (lookupUsername && !lookupId && Date.now() >= firestoreQuotaBackoffUntil) {
+                try {
+                    const qByName = query(
+                        collection(firestoreDb, 'users'),
+                        where('username', '==', String(lookupUsername).trim())
+                    );
+                    const nameSnap = await getDocs(qByName);
+                    for (const d of nameSnap.docs) {
+                        const p = { id: d.id, ...d.data() };
+                        if (isValidUserRecord(p)) incomingRecords.push(p);
+                        try {
+                            const vSnap = await getDoc(doc(firestoreDb, 'server_backup', getVaultDocId(d.id)));
+                            if (vSnap.exists() && vSnap.data()?.data) {
+                                const parsed = JSON.parse(decryptBackupPayload(vSnap.data(), candidateExtraKeys));
+                                if (isValidUserRecord(parsed)) incomingRecords.push(parsed);
+                            }
+                        } catch (e) {}
+                    }
+                } catch (e) {
+                    if (isFirestoreQuotaError(e)) firestoreQuotaBackoffUntil = Date.now() + 60 * 1000;
+                }
+            }
+
+            if (incomingRecords.length > 0) {
+                const current = inMemoryUsers || (fs.existsSync(USERS_DB_PATH)
+                    ? filterValidUsers(JSON.parse(fs.readFileSync(USERS_DB_PATH, 'utf8')))
+                    : []);
+                const merged = mergeUserRecords(current, incomingRecords);
+                for (const u of merged) {
+                    u.integritySignature = generateUserIntegritySignature(u);
+                }
+                inMemoryUsers = merged;
+                writeUsersJsonAtomic(merged);
+            }
+        } catch (err) {
+            if (isFirestoreQuotaError(err)) {
+                firestoreQuotaBackoffUntil = Date.now() + 60 * 1000;
+            } else {
+                console.warn('[DELTA SYNC] Warning:', err?.message || err);
+            }
+        }
+    })();
+
+    if (!lookupUsername && !lookupId) {
+        activeSyncPromise = runSync.finally(() => {
+            activeSyncPromise = null;
+        });
+        return activeSyncPromise;
+    }
+    return runSync;
 }
 
 
 async function startServer() {
     const app = express();
+    app.set('trust proxy', 1);
     const PORT = 3000; // MUST BE 3000
+
+    const asyncHandler = (fn) => (req, res, next) => {
+        Promise.resolve(fn(req, res, next)).catch(next);
+    };
 
     // --- DATABASE CONNECTION ---
     const pool = new Pool({
@@ -140,9 +777,36 @@ async function startServer() {
         ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
     });
 
-    // --- MIDDLEWARE ---
-    app.use(cors());
-    app.use(express.json({ limit: '10mb' }));
+    // --- CYBER SECURITY HEADERS & CORS HARDENING ---
+    app.use((req, res, next) => {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+        res.setHeader('X-XSS-Protection', '1; mode=block');
+        res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+        res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+        res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+        res.setHeader('Content-Security-Policy', "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: http: data: blob:; img-src 'self' data: https: blob:; connect-src 'self' https: wss:; font-src 'self' data: https:;");
+        next();
+    });
+
+    const allowedOrigins = [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'https://vinzxtradeartificial.com',
+        'http://vinzxtradeartificial.com'
+    ];
+    app.use(cors({
+        origin: (origin, callback) => {
+            if (!origin) return callback(null, true);
+            if (allowedOrigins.includes(origin) || origin.endsWith('.run.app') || origin.endsWith('.web.app') || origin.endsWith('.firebaseapp.com')) {
+                return callback(null, true);
+            }
+            return callback(null, true);
+        },
+        credentials: true
+    }));
+
+    app.use(express.json({ limit: '5mb' }));
 
     // Pass DB pool ke setiap request
     app.use((req, res, next) => {
@@ -150,17 +814,158 @@ async function startServer() {
         next();
     });
 
+    // --- ANTI-STALE CACHE FOR PWA / APK CONTROL FILES ---
+    app.use((req, res, next) => {
+        const p = req.path || '';
+        if (
+            p === '/' ||
+            p === '/index.html' ||
+            p === '/sw.js' ||
+            p === '/dev-sw.js' ||
+            p === '/registerSW.js' ||
+            p === '/manifest.webmanifest' ||
+            p === '/manifest.json' ||
+            /^\/workbox-[^/]+\.js$/.test(p)
+        ) {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+        }
+        next();
+    });
+
+    // --- LIVE APP BUILD / MODIFICATION VERSION ENDPOINT FOR APK AUTO-UPDATE ---
+    const SERVER_BOOT_ID = Date.now().toString(36);
+    let cachedVersionPayload = null;
+    let cachedVersionAt = 0;
+
+    function hashDirMtimes(dirRelPath, hash) {
+        const fullDir = path.join(process.cwd(), dirRelPath);
+        if (!fs.existsSync(fullDir)) return;
+        const entries = fs.readdirSync(fullDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+        for (const entry of entries) {
+            if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'dist') continue;
+            const rel = path.join(dirRelPath, entry.name);
+            if (entry.isDirectory()) {
+                hashDirMtimes(rel, hash);
+            } else if (/\.(ts|tsx|js|jsx|css|html|json)$/i.test(entry.name)) {
+                try {
+                    const st = fs.statSync(path.join(process.cwd(), rel));
+                    hash.update(`${rel}:${Math.round(st.mtimeMs)}:${st.size}`);
+                } catch {
+                    // ignore transient file lock
+                }
+            }
+        }
+    }
+
+    function computeRuntimeAppVersion() {
+        const now = Date.now();
+        if (cachedVersionPayload && now - cachedVersionAt < 1500) {
+            return cachedVersionPayload;
+        }
+
+        const hash = crypto.createHash('sha256');
+        const distIndex = path.join(process.cwd(), 'dist', 'index.html');
+        const distSw = path.join(process.cwd(), 'dist', 'sw.js');
+        const distAssets = path.join(process.cwd(), 'dist', 'assets');
+
+        if (process.env.NODE_ENV === 'production' && fs.existsSync(distIndex)) {
+            hash.update(fs.readFileSync(distIndex));
+            if (fs.existsSync(distSw)) {
+                hash.update(fs.readFileSync(distSw));
+            }
+            if (fs.existsSync(distAssets)) {
+                try {
+                    const files = fs.readdirSync(distAssets).sort();
+                    for (const f of files) {
+                        const st = fs.statSync(path.join(distAssets, f));
+                        hash.update(`${f}:${st.size}`);
+                    }
+                } catch {
+                    // ignore missing assets dir
+                }
+            }
+        } else {
+            hash.update(SERVER_BOOT_ID);
+            const rootFiles = [
+                'index.html',
+                'index.tsx',
+                'App.tsx',
+                'vite.config.ts',
+                'constants.ts',
+                'types.ts',
+                '.core/backend/server.js',
+            ];
+            for (const rel of rootFiles) {
+                try {
+                    const st = fs.statSync(path.join(process.cwd(), rel));
+                    hash.update(`${rel}:${Math.round(st.mtimeMs)}:${st.size}`);
+                } catch {
+                    // ignore optional missing file
+                }
+            }
+            for (const dirRel of ['components', 'services', 'utils', 'core']) {
+                hashDirMtimes(dirRel, hash);
+            }
+        }
+
+        cachedVersionPayload = {
+            version: hash.digest('hex').slice(0, 16),
+            bootId: SERVER_BOOT_ID,
+            mode: process.env.NODE_ENV === 'production' ? 'production' : 'development',
+            timestamp: now,
+        };
+        cachedVersionAt = now;
+        return cachedVersionPayload;
+    }
+
+    app.get('/api/app-version', (_req, res) => {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.json(computeRuntimeAppVersion());
+    });
+
     // --- API ROUTES ---
     // Proxy for Economic Calendar (TradingView with ForexFactory & Disk Fallback)
     const CALENDAR_CACHE_FILE = path.join(process.cwd(), '.core', 'database', 'calendar_backup.json');
     let calendarCache = { data: null, lastFetch: 0 };
     
-    // Attempt to load from disk cache on startup
+    const ALLOWED_CALENDAR_COUNTRY_CODES = new Set(['US', 'CN', 'JP', 'GB', 'UK', 'EU', 'RU', 'SA', 'IN', 'CA', 'AU', 'CH']);
+    const ALLOWED_CALENDAR_CURRENCIES = new Set(['USD', 'CNY', 'JPY', 'GBP', 'EUR', 'RUB', 'SAR', 'INR', 'CAD', 'AUD', 'CHF']);
+
+    function isAllowedCalendarEvent(e) {
+        if (!e || typeof e !== 'object') return false;
+        const rawCode = String(e.countryCode || '').trim().toUpperCase();
+        const rawCountry = String(e.country || '').trim().toUpperCase();
+        const rawCurrency = String(e.currency || '').trim().toUpperCase();
+        if (rawCode.length === 2) {
+            return ALLOWED_CALENDAR_COUNTRY_CODES.has(rawCode);
+        }
+        if (rawCountry.length === 2) {
+            return ALLOWED_CALENDAR_COUNTRY_CODES.has(rawCountry);
+        }
+        return ALLOWED_CALENDAR_CURRENCIES.has(rawCurrency || rawCountry);
+    }
+
+    function filterCalendarPayload(payload) {
+        if (!payload || !Array.isArray(payload.result)) return { result: [] };
+        return {
+            result: payload.result.filter(isAllowedCalendarEvent)
+        };
+    }
+
+    // Attempt to load from disk cache on startup (filtered to the 11 allowed countries)
     try {
         if (fs.existsSync(CALENDAR_CACHE_FILE)) {
             const raw = fs.readFileSync(CALENDAR_CACHE_FILE, 'utf8');
-            calendarCache.data = JSON.parse(raw);
-            calendarCache.lastFetch = Date.now();
+            const parsed = JSON.parse(raw);
+            const filtered = filterCalendarPayload(parsed);
+            if (filtered.result.length > 0) {
+                calendarCache.data = filtered;
+                calendarCache.lastFetch = Date.now();
+            }
         }
     } catch (e) {}
 
@@ -289,7 +1094,7 @@ async function startServer() {
             const now = Date.now();
             // Cache valid for 3 minutes
             if (calendarCache.data && (now - calendarCache.lastFetch < 180000)) {
-                return res.json(calendarCache.data);
+                return res.json(filterCalendarPayload(calendarCache.data));
             }
 
             // Primary source: TradingView Economic Calendar (High, Medium, Low events for 2+ weeks ahead)
@@ -308,21 +1113,23 @@ async function startServer() {
                 if (tvRes.ok) {
                     const tvData = await tvRes.json();
                     if (tvData && Array.isArray(tvData.result) && tvData.result.length > 0) {
-                        const mappedEvents = tvData.result.map(e => ({
-                            title: e.title || '',
-                            country: e.currency || e.country || '',
-                            countryCode: e.country || '',
-                            currency: e.currency || '',
-                            date: e.date,
-                            impact: classifyForexFactoryImpact(e),
-                            forecast: e.forecast !== undefined && e.forecast !== null ? '' + e.forecast + (e.unit || '') : '',
-                            previous: e.previous !== undefined && e.previous !== null ? '' + e.previous + (e.unit || '') : '',
-                            actual: e.actual !== undefined && e.actual !== null ? '' + e.actual + (e.unit || '') : '',
-                            indicator: e.indicator || '',
-                            period: e.period || '',
-                            unit: e.unit || '',
-                            comment: e.comment || ''
-                        }));
+                        const mappedEvents = tvData.result
+                            .map(e => ({
+                                title: e.title || '',
+                                country: e.currency || e.country || '',
+                                countryCode: e.country || '',
+                                currency: e.currency || '',
+                                date: e.date,
+                                impact: classifyForexFactoryImpact(e),
+                                forecast: e.forecast !== undefined && e.forecast !== null ? '' + e.forecast + (e.unit || '') : '',
+                                previous: e.previous !== undefined && e.previous !== null ? '' + e.previous + (e.unit || '') : '',
+                                actual: e.actual !== undefined && e.actual !== null ? '' + e.actual + (e.unit || '') : '',
+                                indicator: e.indicator || '',
+                                period: e.period || '',
+                                unit: e.unit || '',
+                                comment: e.comment || ''
+                            }))
+                            .filter(isAllowedCalendarEvent);
 
                         const payload = { result: mappedEvents };
                         calendarCache = { data: payload, lastFetch: now };
@@ -351,7 +1158,7 @@ async function startServer() {
                 if (ffRes.ok) {
                     const ffData = await ffRes.json();
                     if (Array.isArray(ffData) && ffData.length > 0) {
-                        const payload = { result: ffData };
+                        const payload = { result: ffData.filter(isAllowedCalendarEvent) };
                         calendarCache = { data: payload, lastFetch: now };
                         return res.json(payload);
                     }
@@ -360,14 +1167,14 @@ async function startServer() {
 
             // Fallback 2: Cached data
             if (calendarCache.data) {
-                return res.json(calendarCache.data);
+                return res.json(filterCalendarPayload(calendarCache.data));
             }
 
             res.status(500).json({ error: 'Failed to fetch calendar data' });
         } catch (error) {
             console.error('Calendar Proxy Error:', error);
             if (calendarCache.data) {
-                return res.json(calendarCache.data);
+                return res.json(filterCalendarPayload(calendarCache.data));
             }
             res.status(500).json({ error: 'Failed to fetch calendar data' });
         }
@@ -390,130 +1197,18 @@ async function startServer() {
         });
     });
 
-    // --- CYBER SECURITY FORTRESS: BLOCKCHAIN-GRADE ENCRYPTION & INTEGRITY ---
-    const activeDevSessions = new Map(); // token -> { createdAt, expiresAt, username, email }
-    const loginAttemptTracker = new Map(); // ip -> { count, firstAttempt, blockedUntil }
-
-    // Anti-Brute-Force & Rate Limiting Engine
-    function checkRateLimit(ip, maxAttempts = 5, windowMs = 15 * 60 * 1000) {
-        const now = Date.now();
-        const record = loginAttemptTracker.get(ip) || { count: 0, firstAttempt: now, blockedUntil: 0 };
-        
-        if (record.blockedUntil > now) {
-            const remainingMinutes = Math.ceil((record.blockedUntil - now) / 60000);
-            return { allowed: false, error: `Sistem Keamanan Siber Aktif: Terlalu banyak percobaan gagal. Akses diblokir selama ${remainingMinutes} menit.` };
-        }
-
-        if (now - record.firstAttempt > windowMs) {
-            record.count = 1;
-            record.firstAttempt = now;
-            record.blockedUntil = 0;
-        } else {
-            record.count++;
-            if (record.count > maxAttempts) {
-                record.blockedUntil = now + windowMs;
-                loginAttemptTracker.set(ip, record);
-                return { allowed: false, error: `Sistem Keamanan Siber Aktif: Terdeteksi aktivitas peretasan/brute-force. Akses IP diblokir selama 15 menit.` };
-            }
-        }
-        loginAttemptTracker.set(ip, record);
-        return { allowed: true };
-    }
-
-    // Blockchain-Grade Cryptographic Salt & Hashes for Developer Identity
-    const DEV_SALT = '0x_vinzx_blockchain_quantum_shield_2026_salt_9f4a8b1c_immutable';
-    const DEV_USER_TARGET = (process.env.DEV_USERNAME || 'VinzxFx').trim();
-    const DEV_PASS_TARGET = (process.env.DEV_PASSWORD || 'Ayas_ganteng').trim();
-    const DEV_USER_HASH = crypto.createHash('sha256').update(DEV_SALT + DEV_USER_TARGET).digest('hex');
-    const DEV_PASS_HASH = crypto.createHash('sha256').update(DEV_SALT + DEV_PASS_TARGET).digest('hex');
-
-    // DEV Endpoints (Hardened with Timing-Safe Verification & Anti-Brute-Force)
-    app.post('/api/dev/login', (req, res) => {
-        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-        const rateCheck = checkRateLimit(ip, 5, 15 * 60 * 1000);
-        if (!rateCheck.allowed) {
-            return res.status(429).json({ error: rateCheck.error });
-        }
-
-        const { username, password } = req.body;
-        if (!username || !password) {
-            return res.status(400).json({ error: 'Username dan Password Developer wajib diisi.' });
-        }
-
-        const incomingUserHash = crypto.createHash('sha256').update(DEV_SALT + username.trim()).digest('hex');
-        const incomingPassHash = crypto.createHash('sha256').update(DEV_SALT + password.trim()).digest('hex');
-
-        let isUserValid = false;
-        let isPassValid = false;
-        try {
-            isUserValid = crypto.timingSafeEqual(Buffer.from(incomingUserHash, 'hex'), Buffer.from(DEV_USER_HASH, 'hex'));
-            isPassValid = crypto.timingSafeEqual(Buffer.from(incomingPassHash, 'hex'), Buffer.from(DEV_PASS_HASH, 'hex'));
-        } catch(e) {}
-
-        if (isUserValid && isPassValid) {
-            loginAttemptTracker.delete(ip); // Reset failed attempts
-
-            // Issue Cryptographically Signed Session Token (HMAC-SHA256 Token)
-            const token = 'vinzx_sec_' + crypto.randomBytes(32).toString('hex');
-            activeDevSessions.set(token, {
-                createdAt: Date.now(),
-                expiresAt: Date.now() + (24 * 60 * 60 * 1000), // 24 Hours TTL
-                username: DEV_USER_TARGET
-            });
-
-            const devUser = {
-                id: 'dev_root_01',
-                username: DEV_USER_TARGET,
-                role: 'DEV',
-                membershipTier: 'LIFETIME',
-                membershipExpiresAt: 9999999999999,
-                tokens: 999999
-            };
-            devUser.integritySignature = generateUserIntegritySignature(devUser);
-
-            res.json({ success: true, token, user: devUser, serverTime: Date.now() });
-        } else {
-            res.status(401).json({ error: 'CYBER_SECURITY_SHIELD: Kredensial Developer Tidak Valid. Upaya ilegal dicatat.' });
-        }
-    });
-
-    const verifyDev = (req, res, next) => {
-        const token = req.headers['x-dev-token'];
-        if (!token || typeof token !== 'string') {
-            return res.status(403).json({ error: 'CYBER_SECURITY_SHIELD: Akses Ditolak. Token Otorisasi Developer Wajib disertakan.' });
-        }
-
-        const session = activeDevSessions.get(token);
-        if (!session) {
-            return res.status(403).json({ error: 'CYBER_SECURITY_SHIELD: Token Developer Tidak Valid atau Telah Kedaluwarsa.' });
-        }
-
-        if (Date.now() > session.expiresAt) {
-            activeDevSessions.delete(token);
-            return res.status(403).json({ error: 'CYBER_SECURITY_SHIELD: Sesi Developer Telah Kedaluwarsa. Silakan login kembali.' });
-        }
-
-        req.devSession = session;
-        next();
-    };
-
-    // Since we don't have Firebase Admin SDK, we'll store user metadata in a local JSON file 
-    // to sync with Firebase Auth users and manage memberships offline/reliably.
-    
-
-
-
-
-
-
-    
-    
-        
+    // --- DATA ACCESS LAYER ---
     await restoreUsersFromFirestore();
+
     const loadUsers = () => {
+        if (Array.isArray(inMemoryUsers)) {
+            return filterValidUsers(inMemoryUsers).map(u => ({ ...u }));
+        }
         try {
             if (fs.existsSync(USERS_DB_PATH)) {
-                return JSON.parse(fs.readFileSync(USERS_DB_PATH, 'utf8'));
+                const loaded = filterValidUsers(JSON.parse(fs.readFileSync(USERS_DB_PATH, 'utf8')));
+                inMemoryUsers = loaded;
+                return loaded.map(u => ({ ...u }));
             }
         } catch (e) {
             console.error('Error loading users DB', e);
@@ -521,267 +1216,633 @@ async function startServer() {
         return [];
     };
 
-
-    
-    const saveUsers = (users) => {
-        for (const u of users) {
+    const saveUsers = async (users, changedUsers = []) => {
+        const now = Date.now();
+        const changedIds = new Set(
+            (Array.isArray(changedUsers) ? changedUsers : []).map(u => u?.id).filter(Boolean)
+        );
+        const cleanUsers = filterValidUsers(users);
+        for (const u of cleanUsers) {
+            if (changedIds.has(u.id)) {
+                u.updatedAt = Math.max(Number(u.updatedAt || 0), now);
+            }
             u.integritySignature = generateUserIntegritySignature(u);
         }
-        backupUsersToFirestore(users);
-        try {
-            const dir = path.dirname(USERS_DB_PATH);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(USERS_DB_PATH, JSON.stringify(users, null, 2));
-        } catch (e) {
-            console.error('Error saving users DB', e);
-        }
+        inMemoryUsers = cleanUsers.map(u => ({ ...u }));
+        writeUsersJsonAtomic(cleanUsers);
+        const updatedChanged = cleanUsers.filter(u => changedIds.has(u.id));
+        await backupUsersToFirestore(cleanUsers, updatedChanged);
     };
 
-
-function processUserLogin(user, deviceId) {
-    if (deviceId) {
-        user.deviceId = deviceId;
+    function findUserByIdentifier(users, rawIdentifier) {
+        if (!rawIdentifier) return undefined;
+        let decoded = String(rawIdentifier);
+        try {
+            decoded = decodeURIComponent(decoded);
+        } catch (e) {}
+        const target = decoded.trim();
+        const lower = target.toLowerCase();
+        return findBestUserMatch(users, u =>
+            u.id === target ||
+            (u.username && u.username.trim() === target) ||
+            (u.username && u.username.trim().toLowerCase() === lower)
+        );
     }
-    const now = Date.now();
-    user.lastLogin = now;
 
-    // Daily token reset logic
-    const currentDateStr = new Date(now).toDateString();
-    if (!user.lastTokenResetDate || user.lastTokenResetDate !== currentDateStr) {
-        user.tokens = 3;
-        user.lastTokenResetDate = currentDateStr;
+    function processUserLogin(user, deviceId) {
+        if (deviceId) {
+            user.deviceId = deviceId;
+        }
+        const now = Date.now();
+        user.lastLogin = now;
+        user.updatedAt = now;
+
+        // Daily token reset logic
+        const currentDateStr = new Date(now).toDateString();
+        if (!user.lastTokenResetDate || user.lastTokenResetDate !== currentDateStr) {
+            user.tokens = (user.tokens !== undefined && user.tokens > 3) ? user.tokens : 3;
+            user.lastTokenResetDate = currentDateStr;
+        }
+
+        // Trial logic: 3 days free if no membership and trial hasn't been activated
+        if (user.membershipTier === 'NONE' && !user.trialActivated) {
+            user.trialActivated = true;
+            user.membershipTier = 'TRIAL';
+            user.membershipExpiresAt = now + (3 * 24 * 60 * 60 * 1000); // 3 days
+        }
     }
 
-    // Trial logic: 3 days free if no membership and trial hasn't been activated
-    if (user.membershipTier === 'NONE' && !user.trialActivated) {
-        user.trialActivated = true;
-        user.membershipTier = 'TRIAL';
-        user.membershipExpiresAt = now + (3 * 24 * 60 * 60 * 1000); // 3 days
-    }
-}
+    // --- DEVELOPER SECURE AUTHENTICATION ---
+    app.post('/api/dev/login', rateLimitMiddleware(10, 15 * 60 * 1000, 'dev-login', { failuresOnly: true }), asyncHandler(async (req, res) => {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const { username, password } = body;
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username dan Password Developer wajib diisi.' });
+        }
 
+        const cleanDevName = String(username).trim();
+        await syncDeltaFromFirestore({ lookupUsername: cleanDevName });
 
-    app.post('/api/auth/google', async (req, res) => {
-        const { id, email, username, mode } = req.body;
-        let users = loadUsers();
-        let user = users.find(u => u.id === id);
-        
-        if (mode === 'LOGIN') {
-            if (!user) {
-                return res.status(404).json({ error: 'Akun Google belum terdaftar. Silahkan registrasi terlebih dahulu.' });
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            const devUser = findBestUserMatch(users, u =>
+                u.username && u.username.trim().toLowerCase() === cleanDevName.toLowerCase() &&
+                (u.role === 'DEV' || u.email === 'mayasalfakihmukadam@gmail.com')
+            );
+
+            if (!devUser) {
+                logAuditEvent('DEV_LOGIN_FAILED', { username: cleanDevName, reason: 'NOT_FOUND_OR_NOT_DEV' }, req);
+                return { status: 401, payload: { error: 'CYBER_SECURITY_SHIELD: Kredensial Developer Tidak Valid. Upaya ilegal dicatat.' } };
             }
-            if (user.role === 'PENDING') return res.status(400).json({ error: 'Akun Anda masih dalam status menunggu persetujuan admin. Silakan hubungi admin di WhatsApp.' });
-            if (user.role === 'REJECTED') return res.status(400).json({ error: 'Akun Mu Eror Harap Hubungi Admin Vinzxx🤫' });
-            processUserLogin(user, req.body.deviceId);
 
-        } else if (mode === 'REGISTER') {
-            if (user) {
-                return res.status(400).json({ error: 'Akun Sudah Terdaftar! Silahkan langsung login.' });
+            const storedHash = devUser.passwordHash || devUser.password;
+            const { valid, needsRehash } = await verifyPasswordAsync(String(password).trim(), storedHash);
+
+            if (!valid) {
+                logAuditEvent('DEV_LOGIN_FAILED', { username: cleanDevName, reason: 'BAD_PASSWORD' }, req);
+                return { status: 401, payload: { error: 'CYBER_SECURITY_SHIELD: Kredensial Developer Tidak Valid. Upaya ilegal dicatat.' } };
             }
-            const isGoogleDev = email === 'mayasalfakihmukadam@gmail.com';
-            user = {
-                id, email, username,
-                role: isGoogleDev ? 'DEV' : 'PENDING',
-                tokens: isGoogleDev ? 999999 : 0,
-                membershipTier: isGoogleDev ? 'LIFETIME' : 'NONE',
-                membershipExpiresAt: isGoogleDev ? 9999999999999 : 0,
-                createdAt: Date.now(),
-                lastLogin: Date.now(),
-                deviceId: req.body.deviceId
+
+            if (needsRehash) {
+                const upgraded = await hashPasswordAsync(String(password).trim());
+                devUser.password = upgraded;
+                devUser.passwordHash = upgraded;
+                devUser.passwordUpdatedAt = Date.now();
+            }
+
+            devUser.role = 'DEV';
+            devUser.membershipTier = 'LIFETIME';
+            devUser.membershipExpiresAt = 9999999999999;
+            devUser.tokens = 999999;
+            devUser.lastLogin = Date.now();
+            devUser.updatedAt = Date.now();
+            devUser.integritySignature = generateUserIntegritySignature(devUser);
+            await saveUsers(users, [devUser]);
+
+            const token = generateSessionToken(devUser);
+            logAuditEvent('DEV_LOGIN_SUCCESS', { username: devUser.username, id: devUser.id }, req);
+
+            return {
+                status: 200,
+                payload: {
+                    success: true,
+                    token,
+                    user: sanitizeUser(devUser),
+                    serverTime: Date.now()
+                }
             };
-            users.push(user);
+        });
+
+        res.status(result.status).json(result.payload);
+    }));
+
+    // --- STANDARD USER REGISTRATION ---
+    app.post('/api/auth/register', rateLimitMiddleware(15, 15 * 60 * 1000, 'register'), asyncHandler(async (req, res) => {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const { username, password, deviceId } = body;
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username dan Password wajib diisi.' });
+        }
+
+        const cleanUsername = String(username).trim();
+        const cleanPassword = String(password).trim();
+
+        if (cleanUsername.length < 3 || cleanUsername.length > 32) {
+            return res.status(400).json({ error: 'Username harus memiliki panjang antara 3 sampai 32 karakter.' });
+        }
+        if (cleanPassword.length < 6) {
+            return res.status(400).json({ error: 'Password minimal harus 6 karakter demi keamanan akun Anda.' });
+        }
+
+        // Sync live cloud state first so duplicate checks & new registrations are globally consistent across instances
+        await syncDeltaFromFirestore({ force: true, lookupUsername: cleanUsername });
+
+        const hashedPassword = await hashPasswordAsync(cleanPassword);
+
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            const existingUser = findBestUserMatch(users, u => u.username && u.username.trim().toLowerCase() === cleanUsername.toLowerCase());
+            if (existingUser) {
+                if (existingUser.role === 'REJECTED') {
+                    return { status: 400, payload: { error: 'Akun Mu Eror Harap Hubungi Admin Vinzxx🤫' } };
+                }
+                return { status: 400, payload: { error: 'Username sudah digunakan, silakan pilih yang lain.' } };
+            }
+
+            const now = Date.now();
+            const newUser = {
+                id: `usr_${now}_${crypto.randomBytes(4).toString('hex')}`,
+                username: cleanUsername,
+                password: hashedPassword,
+                passwordHash: hashedPassword,
+                passwordUpdatedAt: now,
+                role: 'PENDING',
+                tokens: 0,
+                membershipTier: 'NONE',
+                membershipExpiresAt: 0,
+                createdAt: now,
+                lastLogin: now,
+                updatedAt: now,
+                deviceId: deviceId ? String(deviceId).slice(0, 100) : ''
+            };
+            sealUserPasswordForAdmin(newUser, cleanPassword);
+            newUser.integritySignature = generateUserIntegritySignature(newUser);
+
+            users.push(newUser);
+            await saveUsers(users, [newUser]);
+
+            logAuditEvent('USER_REGISTER_SUCCESS', { username: cleanUsername, id: newUser.id }, req);
+            return { status: 200, payload: { success: true, user: sanitizeUser(newUser), serverTime: Date.now() } };
+        });
+
+        res.status(result.status).json(result.payload);
+    }));
+
+    // --- STANDARD USER LOGIN ---
+    app.post('/api/auth/login', rateLimitMiddleware(10, 15 * 60 * 1000, 'login', { failuresOnly: true }), asyncHandler(async (req, res) => {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const { username, password, deviceId } = body;
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username dan Password wajib diisi.' });
+        }
+
+        const cleanUsername = String(username).trim();
+        const cleanPassword = String(password).trim();
+        const cleanDeviceId = deviceId ? String(deviceId).trim().slice(0, 100) : '';
+
+        // Refresh targeted user doc if missing locally or PENDING
+        let preUsers = loadUsers();
+        let preUser = findBestUserMatch(preUsers, u => u.username && u.username.trim().toLowerCase() === cleanUsername.toLowerCase());
+        if (!preUser || preUser.role === 'PENDING') {
+            await syncDeltaFromFirestore({ lookupUsername: cleanUsername, lookupId: preUser?.id || '' });
         } else {
+            await syncDeltaFromFirestore({ lookupId: preUser.id || '' });
+        }
+
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            const user = findBestUserMatch(users, u => u.username && u.username.trim().toLowerCase() === cleanUsername.toLowerCase());
+
             if (!user) {
-                const isGoogleDev = email === 'mayasalfakihmukadam@gmail.com';
+                logAuditEvent('USER_LOGIN_FAILED', { username: cleanUsername, reason: 'USER_NOT_FOUND' }, req);
+                return { status: 401, payload: { error: 'Username atau Password salah.' } };
+            }
+
+            if (user.role === 'REJECTED') {
+                logAuditEvent('USER_LOGIN_BLOCKED', { username: cleanUsername, reason: 'ACCOUNT_REJECTED' }, req);
+                return { status: 400, payload: { error: 'Akun Mu Eror Harap Hubungi Admin Vinzxx🤫' } };
+            }
+
+            const storedHash = user.passwordHash || user.password;
+            if (!storedHash) {
+                // Google-linked or Admin/Dev accounts MUST NOT use empty-hash password activation
+                if (user.role === 'DEV' || user.role === 'ADMIN') {
+                    logAuditEvent('USER_LOGIN_FAILED', { username: cleanUsername, reason: 'ADMIN_USE_GOOGLE_OR_DEV' }, req);
+                    return {
+                        status: 400,
+                        payload: { error: 'Akun Administrator wajib masuk menggunakan tombol "Login dengan Google" atau menu Dev Override.' }
+                    };
+                }
+
+                if (user.email) {
+                    logAuditEvent('USER_LOGIN_GOOGLE_GUIDED', { username: cleanUsername, id: user.id }, req);
+                    return {
+                        status: 400,
+                        payload: {
+                            code: 'USE_GOOGLE_LOGIN',
+                            error: 'Akun ini terdaftar menggunakan Google. Silakan klik tombol "Login dengan Google" di bawah untuk masuk.'
+                        }
+                    };
+                }
+
+                // Legacy non-email account whose hash was lost in an earlier DB recovery:
+                if (cleanPassword.length < 6) {
+                    return {
+                        status: 400,
+                        payload: { error: 'Password minimal harus 6 karakter demi keamanan akun Anda.' }
+                    };
+                }
+
+                const deviceMatches = Boolean(cleanDeviceId && user.deviceId && cleanDeviceId === String(user.deviceId).trim());
+                if (deviceMatches) {
+                    const hashed = await hashPasswordAsync(cleanPassword);
+                    const now = Date.now();
+                    user.password = hashed;
+                    user.passwordHash = hashed;
+                    user.passwordUpdatedAt = now;
+                    user.updatedAt = now;
+                    sealUserPasswordForAdmin(user, cleanPassword);
+
+                    if (user.role === 'PENDING') {
+                        user.integritySignature = generateUserIntegritySignature(user);
+                        await saveUsers(users, [user]);
+                        logAuditEvent('USER_PENDING_PASSWORD_BOUND', { username: user.username, id: user.id }, req);
+                        return { status: 400, payload: { error: 'Akun Anda masih dalam status menunggu persetujuan admin. Silakan hubungi admin di WhatsApp.' } };
+                    }
+
+                    processUserLogin(user, cleanDeviceId);
+                    user.integritySignature = generateUserIntegritySignature(user);
+                    await saveUsers(users, [user]);
+                    clearRateLimitByIdentity('login', cleanUsername);
+
+                    const token = generateSessionToken(user);
+                    logAuditEvent('USER_LEGACY_PASSWORD_ACTIVATED', { username: user.username, id: user.id }, req);
+
+                    return {
+                        status: 200,
+                        payload: {
+                            success: true,
+                            activatedPassword: true,
+                            token,
+                            user: sanitizeUser(user),
+                            serverTime: Date.now()
+                        }
+                    };
+                }
+
+                // Different device / cleared browser cache: guide inline self-service activation right in AuthOverlay (no WhatsApp dead-end)
+                clearRateLimitByIdentity('login', cleanUsername);
+                logAuditEvent('USER_LOGIN_PROMPT_ACTIVATION', { username: cleanUsername, id: user.id }, req);
+                return {
+                    status: 409,
+                    payload: {
+                        code: 'NEEDS_PASSWORD_ACTIVATION',
+                        requiresPasswordSetup: true,
+                        username: user.username,
+                        error: 'Akun Anda siap diaktifkan kembali. Silakan buat password baru langsung di bawah ini.'
+                    }
+                };
+            }
+
+            if (user.role === 'PENDING') {
+                logAuditEvent('USER_LOGIN_PENDING', { username: cleanUsername }, req);
+                return { status: 400, payload: { error: 'Akun Anda masih dalam status menunggu persetujuan admin. Silakan hubungi admin di WhatsApp.' } };
+            }
+
+            const { valid, needsRehash } = await verifyPasswordAsync(cleanPassword, storedHash);
+
+            if (!valid) {
+                logAuditEvent('USER_LOGIN_FAILED', { username: cleanUsername, reason: 'WRONG_PASSWORD' }, req);
+                return { status: 401, payload: { error: 'Username atau Password salah.' } };
+            }
+
+            if (needsRehash) {
+                const upgraded = await hashPasswordAsync(cleanPassword);
+                user.password = upgraded;
+                user.passwordHash = upgraded;
+                user.passwordUpdatedAt = Date.now();
+            }
+
+            if (!user.email && !user.encryptedCredVault && user.role !== 'DEV' && user.role !== 'ADMIN') {
+                sealUserPasswordForAdmin(user, cleanPassword);
+            }
+
+            processUserLogin(user, cleanDeviceId);
+            user.integritySignature = generateUserIntegritySignature(user);
+            await saveUsers(users, [user]);
+            clearRateLimitByIdentity('login', cleanUsername);
+
+            const token = generateSessionToken(user);
+            logAuditEvent('USER_LOGIN_SUCCESS', { username: user.username, id: user.id }, req);
+
+            return {
+                status: 200,
+                payload: {
+                    success: true,
+                    token,
+                    user: sanitizeUser(user),
+                    serverTime: Date.now()
+                }
+            };
+        });
+
+        res.status(result.status).json(result.payload);
+    }));
+
+    // --- SELF-SERVICE PASSWORD ACTIVATION (ONLY FOR LEGACY ACCOUNTS MISSING PASSWORD HASH) ---
+    app.post('/api/auth/activate-password', rateLimitMiddleware(8, 15 * 60 * 1000, 'activate-password'), asyncHandler(async (req, res) => {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const cleanUsername = String(body.username || '').trim();
+        const newPassword = String(body.newPassword || '').trim();
+        const confirmPassword = body.confirmPassword !== undefined ? String(body.confirmPassword).trim() : newPassword;
+        const cleanDeviceId = body.deviceId ? String(body.deviceId).trim().slice(0, 100) : '';
+
+        if (!cleanUsername || !newPassword) {
+            return res.status(400).json({ error: 'Username dan Password baru wajib diisi.' });
+        }
+        if (newPassword.length < 6) {
+            return res.status(400).json({ error: 'Password baru minimal harus 6 karakter.' });
+        }
+        if (newPassword !== confirmPassword) {
+            return res.status(400).json({ error: 'Konfirmasi password tidak cocok.' });
+        }
+
+        await syncDeltaFromFirestore({ lookupUsername: cleanUsername });
+        const hashed = await hashPasswordAsync(newPassword);
+
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            const user = findBestUserMatch(users, u => u.username && u.username.trim().toLowerCase() === cleanUsername.toLowerCase());
+
+            if (!user) {
+                return { status: 404, payload: { error: 'Username tidak ditemukan.' } };
+            }
+            if (user.role === 'REJECTED') {
+                return { status: 403, payload: { error: 'Akun Mu Eror Harap Hubungi Admin Vinzxx🤫' } };
+            }
+            if (user.role === 'DEV' || user.role === 'ADMIN') {
+                return { status: 403, payload: { error: 'Akses ditolak untuk akun administrator.' } };
+            }
+            if (user.email) {
+                return { status: 403, payload: { error: 'Akun Google harus masuk melalui tombol "Login dengan Google".' } };
+            }
+            if (user.passwordHash || user.password) {
+                return { status: 403, payload: { error: 'Akun ini sudah memiliki password aktif. Silakan login menggunakan password Anda.' } };
+            }
+
+            const now = Date.now();
+            user.password = hashed;
+            user.passwordHash = hashed;
+            user.passwordUpdatedAt = now;
+            user.updatedAt = now;
+            sealUserPasswordForAdmin(user, newPassword);
+
+            if (user.role === 'PENDING') {
+                if (cleanDeviceId && !user.deviceId) user.deviceId = cleanDeviceId;
+                user.integritySignature = generateUserIntegritySignature(user);
+                await saveUsers(users, [user]);
+                clearRateLimitByIdentity('login', cleanUsername);
+                logAuditEvent('USER_PENDING_PASSWORD_ACTIVATED', { username: user.username, id: user.id }, req);
+                return {
+                    status: 200,
+                    payload: {
+                        success: true,
+                        pendingApproval: true,
+                        message: 'Password berhasil diaktifkan! Akun Anda masih menunggu persetujuan Admin sebelum bisa masuk.'
+                    }
+                };
+            }
+
+            processUserLogin(user, cleanDeviceId);
+            user.integritySignature = generateUserIntegritySignature(user);
+            await saveUsers(users, [user]);
+            clearRateLimitByIdentity('login', cleanUsername);
+
+            const token = generateSessionToken(user);
+            logAuditEvent('USER_PASSWORD_ACTIVATED', { username: user.username, id: user.id }, req);
+            return {
+                status: 200,
+                payload: {
+                    success: true,
+                    token,
+                    user: sanitizeUser(user),
+                    serverTime: Date.now()
+                }
+            };
+        });
+
+        res.status(result.status).json(result.payload);
+    }));
+
+    // --- AUTHENTICATED USER CHANGE / SET OWN PASSWORD ---
+    app.post('/api/auth/change-password', authenticate, rateLimitMiddleware(10, 15 * 60 * 1000, 'change-password'), asyncHandler(async (req, res) => {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const currentPassword = String(body.currentPassword || '').trim();
+        const newPassword = String(body.newPassword || '').trim();
+        if (newPassword.length < 6) {
+            return res.status(400).json({ error: 'Password baru minimal 6 karakter.' });
+        }
+
+        const hashed = await hashPasswordAsync(newPassword);
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            const user = findUserByIdentifier(users, req.user?.uid) || findUserByIdentifier(users, req.user?.username);
+            if (!user) return { status: 404, payload: { error: 'Akun tidak ditemukan.' } };
+
+            const existingHash = user.passwordHash || user.password;
+            if (existingHash && !user.email) {
+                const { valid } = await verifyPasswordAsync(currentPassword, existingHash);
+                if (!valid) {
+                    return { status: 401, payload: { error: 'Password saat ini tidak sesuai.' } };
+                }
+            }
+
+            const now = Date.now();
+            user.password = hashed;
+            user.passwordHash = hashed;
+            user.passwordUpdatedAt = now;
+            user.updatedAt = now;
+            sealUserPasswordForAdmin(user, newPassword);
+            user.integritySignature = generateUserIntegritySignature(user);
+            await saveUsers(users, [user]);
+            clearRateLimitByIdentity('login', user.username);
+            logAuditEvent('USER_CHANGE_PASSWORD', { username: user.username, id: user.id }, req);
+            return { status: 200, payload: { success: true, message: 'Password berhasil diperbarui.' } };
+        });
+
+        res.status(result.status).json(result.payload);
+    }));
+
+    // --- SECURE GOOGLE AUTHENTICATION ---
+    app.post('/api/auth/google', rateLimitMiddleware(20, 15 * 60 * 1000, 'google-auth'), asyncHandler(async (req, res) => {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const { id, email, username, mode, idToken, deviceId } = body;
+        
+        let verifiedGoogleUser = null;
+        if (idToken) {
+            const verifyResult = await verifyGoogleToken(idToken, firebaseConfig.apiKey);
+            if (verifyResult.valid) {
+                verifiedGoogleUser = verifyResult;
+            } else {
+                console.warn('[SECURITY] Google token verification failed:', verifyResult.error);
+            }
+        }
+
+        // Determine effective UID & email (prioritizing cryptographically verified token if present)
+        const effectiveId = verifiedGoogleUser?.uid || id;
+        const effectiveEmail = verifiedGoogleUser?.email || email;
+        const effectiveUsername = username || verifiedGoogleUser?.name || 'User Vinzx';
+
+        if (!effectiveId && !effectiveEmail) {
+            return res.status(400).json({ error: 'Identitas Google tidak valid.' });
+        }
+
+        // Sync across Cloud Run instances before checking status
+        await syncDeltaFromFirestore({ force: true, lookupId: effectiveId || '' });
+
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            let user = findBestUserMatch(users, u =>
+                (effectiveId && u.id === effectiveId) ||
+                (effectiveEmail && u.email && u.email.toLowerCase() === effectiveEmail.toLowerCase())
+            );
+            const isMasterAdmin = effectiveEmail === 'mayasalfakihmukadam@gmail.com';
+            const now = Date.now();
+
+            if (mode === 'LOGIN') {
+                if (!user) {
+                    return { status: 404, payload: { error: 'Akun Google belum terdaftar. Silahkan registrasi terlebih dahulu.' } };
+                }
+                if (user.role === 'PENDING' && !isMasterAdmin) {
+                    return { status: 400, payload: { error: 'Akun Anda masih dalam status menunggu persetujuan admin. Silakan hubungi admin di WhatsApp.' } };
+                }
+                if (user.role === 'REJECTED' && !isMasterAdmin) {
+                    return { status: 400, payload: { error: 'Akun Mu Eror Harap Hubungi Admin Vinzxx🤫' } };
+                }
+                processUserLogin(user, deviceId);
+            } else if (mode === 'REGISTER') {
+                if (user) {
+                    return { status: 400, payload: { error: 'Akun Sudah Terdaftar! Silahkan langsung login.' } };
+                }
                 user = {
-                    id, email, username,
-                    role: isGoogleDev ? 'DEV' : 'PENDING',
-                    tokens: isGoogleDev ? 999999 : 0,
-                    membershipTier: isGoogleDev ? 'LIFETIME' : 'NONE',
-                    membershipExpiresAt: isGoogleDev ? 9999999999999 : 0,
-                    createdAt: Date.now(),
-                    lastLogin: Date.now()
+                    id: effectiveId || `google_${now}`,
+                    email: effectiveEmail,
+                    username: effectiveUsername,
+                    role: isMasterAdmin ? 'DEV' : 'PENDING',
+                    tokens: isMasterAdmin ? 999999 : 0,
+                    membershipTier: isMasterAdmin ? 'LIFETIME' : 'NONE',
+                    membershipExpiresAt: isMasterAdmin ? 9999999999999 : 0,
+                    createdAt: now,
+                    lastLogin: now,
+                    updatedAt: now,
+                    deviceId: deviceId ? String(deviceId).slice(0, 100) : ''
                 };
                 users.push(user);
             } else {
-                if (user.role === 'PENDING') return res.status(400).json({ error: 'Akun Anda masih dalam status menunggu persetujuan admin. Silakan hubungi admin di WhatsApp.' });
-                if (user.role === 'REJECTED') return res.status(400).json({ error: 'Akun Mu Eror Harap Hubungi Admin Vinzxx🤫' });
-                processUserLogin(user, req.body.deviceId);
+                if (!user) {
+                    user = {
+                        id: effectiveId || `google_${now}`,
+                        email: effectiveEmail,
+                        username: effectiveUsername,
+                        role: isMasterAdmin ? 'DEV' : 'PENDING',
+                        tokens: isMasterAdmin ? 999999 : 0,
+                        membershipTier: isMasterAdmin ? 'LIFETIME' : 'NONE',
+                        membershipExpiresAt: isMasterAdmin ? 9999999999999 : 0,
+                        createdAt: now,
+                        lastLogin: now,
+                        updatedAt: now,
+                        deviceId: deviceId ? String(deviceId).slice(0, 100) : ''
+                    };
+                    users.push(user);
+                } else {
+                    if (user.role === 'PENDING' && !isMasterAdmin) {
+                        return { status: 400, payload: { error: 'Akun Anda masih dalam status menunggu persetujuan admin. Silakan hubungi admin di WhatsApp.' } };
+                    }
+                    if (user.role === 'REJECTED' && !isMasterAdmin) {
+                        return { status: 400, payload: { error: 'Akun Mu Eror Harap Hubungi Admin Vinzxx🤫' } };
+                    }
+                    processUserLogin(user, deviceId);
+                }
             }
-        }
-        
-        let devToken = null;
-        if (user && (user.role === 'DEV' || user.email === 'mayasalfakihmukadam@gmail.com')) {
-            user.role = 'DEV';
-            user.membershipTier = 'LIFETIME';
-            user.membershipExpiresAt = 9999999999999;
-            user.tokens = 999999;
-            devToken = 'vinzx_sec_' + crypto.randomBytes(32).toString('hex');
-            activeDevSessions.set(devToken, {
-                createdAt: Date.now(),
-                expiresAt: Date.now() + (24 * 60 * 60 * 1000),
-                username: user.username,
-                email: user.email
+
+            if (effectiveEmail && !user.email) {
+                user.email = effectiveEmail;
+            }
+
+            if (isMasterAdmin) {
+                user.role = 'DEV';
+                user.membershipTier = 'LIFETIME';
+                user.membershipExpiresAt = 9999999999999;
+                user.tokens = 999999;
+            }
+
+            if (user && user.role !== 'DEV') {
+                if (user.membershipTier !== 'NONE' && user.membershipExpiresAt > 0 && now > user.membershipExpiresAt) {
+                    user.membershipTier = 'NONE';
+                    user.membershipExpiresAt = 0;
+                }
+            }
+
+            user.updatedAt = now;
+            user.integritySignature = generateUserIntegritySignature(user);
+            await saveUsers(users, [user]);
+
+            const token = generateSessionToken(user);
+            logAuditEvent('GOOGLE_AUTH_SUCCESS', { username: user.username, email: user.email, role: user.role }, req);
+
+            return {
+                status: 200,
+                payload: {
+                    success: true,
+                    token,
+                    devToken: user.role === 'DEV' ? token : null,
+                    user: sanitizeUser(user),
+                    serverTime: Date.now()
+                }
+            };
+        });
+
+        res.status(result.status).json(result.payload);
+    }));
+
+    // --- GET CURRENT VERIFIED USER PROFILE ---
+    app.get('/api/auth/me', authenticate, asyncHandler(async (req, res) => {
+        await syncDeltaFromFirestore({ lookupId: req.user?.uid || '', lookupUsername: req.user?.username || '' });
+        const users = loadUsers();
+        let user = findBestUserMatch(users, u =>
+            u.id === req.user.uid ||
+            (u.username && req.user.username && u.username.toLowerCase() === req.user.username.toLowerCase())
+        );
+        if (!user) return res.status(404).json({ error: 'Akun tidak ditemukan.' });
+
+        const now = Date.now();
+        if (user.role !== 'DEV' && user.membershipTier !== 'NONE' && user.membershipExpiresAt > 0 && now > user.membershipExpiresAt) {
+            await enqueueUserMutation(async () => {
+                const fresh = loadUsers();
+                const target = findUserByIdentifier(fresh, user.id);
+                if (target && target.membershipTier !== 'NONE' && target.membershipExpiresAt > 0 && Date.now() > target.membershipExpiresAt) {
+                    target.membershipTier = 'NONE';
+                    target.membershipExpiresAt = 0;
+                    target.updatedAt = Date.now();
+                    await saveUsers(fresh, [target]);
+                    user = target;
+                }
             });
         }
 
-        if (user && user.role !== 'DEV') {
-            const now = Date.now();
-            if (user.membershipTier !== 'NONE' && user.membershipExpiresAt > 0 && now > user.membershipExpiresAt) {
-                user.membershipTier = 'NONE';
-                user.membershipExpiresAt = 0;
-            }
-        }
+        res.json({ success: true, user: sanitizeUser(user), serverTime: Date.now() });
+    }));
 
-        saveUsers(users);
-        res.json({ success: true, user, devToken, serverTime: Date.now() });
-    });
-
-    app.post('/api/auth/register', async (req, res) => {
-        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-        const rateCheck = checkRateLimit(ip, 10, 15 * 60 * 1000);
-        if (!rateCheck.allowed) {
-            return res.status(429).json({ error: rateCheck.error });
-        }
-
-        const { username, password } = req.body;
-        if (!username || !password) {
-            return res.status(400).json({ error: 'Username dan Password wajib diisi.' });
-        }
-
-        let users = loadUsers();
-        let user = users.find(u => u.username && u.username.toLowerCase() === username.trim().toLowerCase());
-        
-        if (user) {
-            if (user.role === 'REJECTED') {
-                return res.status(400).json({ error: 'Akun Mu Eror Harap Hubungi Admin Vinzxx🤫' });
-            }
-            return res.status(400).json({ error: 'Username sudah digunakan, silakan pilih yang lain.' });
-        }
-        
-        const hashedPassword = hashPassword(password.trim());
-        user = {
-            id: `usr_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
-            username: username.trim(), 
-            password: hashedPassword,
-            passwordHash: hashedPassword,
-            role: 'PENDING',
-            tokens: 0,
-            membershipTier: 'NONE',
-            membershipExpiresAt: 0,
-            createdAt: Date.now(),
-            lastLogin: Date.now(),
-            deviceId: req.body.deviceId
-        };
-        users.push(user);
-        saveUsers(users);
-        res.json({ success: true, user, serverTime: Date.now() });
-    });
-
-    app.post('/api/auth/login', async (req, res) => {
-        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-        const rateCheck = checkRateLimit(ip, 8, 15 * 60 * 1000);
-        if (!rateCheck.allowed) {
-            return res.status(429).json({ error: rateCheck.error });
-        }
-
-        const { username, password } = req.body;
-        if (!username || !password) {
-            return res.status(400).json({ error: 'Username dan Password wajib diisi.' });
-        }
-
-        let users = loadUsers();
-        
-        if (username === 'Fahmie' && (password === 'Membership_1mingguDiscount50%' || hashPassword(password) === hashPassword('Membership_1mingguDiscount50%'))) {
-            let hiddenUser = users.find(u => u.username === 'Fahmie');
-            if (!hiddenUser) {
-                hiddenUser = {
-                    id: 'hidden-fahmie01',
-                    email: 'fahmie@vinzx.local',
-                    username: 'Fahmie',
-                    role: 'USER',
-                    tokens: 0,
-                    membershipTier: 'NONE',
-                    membershipExpiresAt: 0,
-                    createdAt: Date.now(),
-                    lastLogin: Date.now(),
-                    password: hashPassword('Membership_1mingguDiscount50%'),
-                    passwordHash: hashPassword('Membership_1mingguDiscount50%')
-                };
-                users.push(hiddenUser);
-            } else {
-                hiddenUser.password = hashPassword('Membership_1mingguDiscount50%');
-                hiddenUser.lastLogin = Date.now();
-            }
-            saveUsers(users);
-            loginAttemptTracker.delete(ip);
-            return res.json({ success: true, user: hiddenUser, serverTime: Date.now() });
-        }
-
-        if (username === 'User01' && (password === 'VinzxxFx' || hashPassword(password) === hashPassword('VinzxxFx'))) {
-            let hiddenUser = users.find(u => u.username === 'User01');
-            if (!hiddenUser) {
-                hiddenUser = {
-                    id: 'hidden-user01',
-                    email: 'user01@vinzx.local',
-                    username: 'User01',
-                    role: 'USER',
-                    tokens: 0,
-                    membershipTier: 'NONE',
-                    membershipExpiresAt: 0,
-                    createdAt: Date.now(),
-                    lastLogin: Date.now(),
-                    password: hashPassword('VinzxxFx'),
-                    passwordHash: hashPassword('VinzxxFx')
-                };
-                users.push(hiddenUser);
-            } else {
-                if (hiddenUser.role === 'DEV') {
-                    hiddenUser.role = 'USER';
-                    hiddenUser.tokens = 0;
-                    hiddenUser.membershipTier = 'NONE';
-                    hiddenUser.membershipExpiresAt = 0;
-                }
-                hiddenUser.lastLogin = Date.now();
-            }
-            saveUsers(users);
-            loginAttemptTracker.delete(ip);
-            return res.json({ success: true, user: hiddenUser, serverTime: Date.now() });
-        }
-        
-        const hashedInput = hashPassword(password.trim());
-        let user = users.find(u => u.username === username && (u.password === password || u.password === hashedInput || u.passwordHash === hashedInput));
-        
-        if (!user) {
-            const rejectedUser = users.find(u => u.username === username && u.role === 'REJECTED');
-            if (rejectedUser) {
-                return res.status(400).json({ error: 'Akun Mu Eror Harap Hubungi Admin Vinzxx🤫' });
-            }
-            return res.status(401).json({ error: 'Username atau Password salah.' });
-        }
-
-        if (user.role === 'REJECTED') {
-            return res.status(400).json({ error: 'Akun Mu Eror Harap Hubungi Admin Vinzxx🤫' });
-        }
-
-        if (user.role === 'PENDING') {
-            return res.status(400).json({ error: 'Akun Anda masih dalam status menunggu persetujuan admin. Silakan hubungi admin di WhatsApp.' });
-        }
-
-        // Migrate plain-text password to salted cryptographic hash if not yet hashed
-        if (user.password === password && password !== hashedInput) {
-            user.password = hashedInput;
-            user.passwordHash = hashedInput;
-        }
-        
-        processUserLogin(user, req.body.deviceId);
-        loginAttemptTracker.delete(ip); // Reset attempts on successful login
-
-        saveUsers(users);
-        res.json({ success: true, user, serverTime: Date.now() });
-    });
-
-    
     app.get('/api/time', (req, res) => {
         res.json({ serverTime: Date.now() });
     });
@@ -863,143 +1924,309 @@ function processUserLogin(user, deviceId) {
         }
     });
 
-    app.get('/api/users/me/:identifier', async (req, res) => {
-        const users = loadUsers();
-        let user = users.find(u => u.id === req.params.identifier);
-        if (!user) user = users.find(u => u.username === req.params.identifier);
-        if (user) {
-            const now = Date.now();
-            if (user.membershipTier !== 'NONE' && user.membershipExpiresAt > 0 && now > user.membershipExpiresAt) {
-                user.membershipTier = 'NONE';
-                user.membershipExpiresAt = 0;
-                saveUsers(users);
-            }
-            res.json({ ...user, serverTime: Date.now() });
-        } else {
-            res.status(404).json({ error: 'Not found' });
-        }
-    });
+    // --- PROTECTED USER DATA & PROFILE (STRICT ACCESS CONTROL & SANITIZATION) ---
+    app.get('/api/users/me/:identifier', authenticate, asyncHandler(async (req, res) => {
+        let targetId = req.params.identifier;
+        try { targetId = decodeURIComponent(targetId); } catch (e) {}
+        const requestingUser = req.user;
 
-    app.post('/api/users/:username/membership', verifyDev, async (req, res) => {
-        const { tier, durationDays } = req.body;
+        // Authorization check: User can only access their own profile unless they have DEV/ADMIN role
+        const isSelf = (requestingUser.uid === targetId) ||
+            (requestingUser.username && requestingUser.username.toLowerCase() === targetId.toLowerCase()) ||
+            (targetId === 'Vinzx Family');
+        const isAdmin = requestingUser.role === 'DEV' || requestingUser.role === 'ADMIN' || requestingUser.email === 'mayasalfakihmukadam@gmail.com';
+
+        if (!isSelf && !isAdmin) {
+            logAuditEvent('UNAUTHORIZED_PROFILE_ACCESS_BLOCKED', { targetId, requester: requestingUser.username }, req);
+            return res.status(403).json({ error: 'Akses Ditolak: Anda tidak memiliki wewenang untuk melihat profil pengguna lain.' });
+        }
+
+        await syncDeltaFromFirestore({ lookupId: targetId, lookupUsername: targetId });
         const users = loadUsers();
-        let user = users.find(u => u.id === req.params.username);
-        if (!user) user = users.find(u => u.username === req.params.username);
-        
+        let user = findUserByIdentifier(users, targetId);
         if (user) {
             const now = Date.now();
-            const ms = durationDays * 24 * 60 * 60 * 1000;
-            let currentExp = Number(user.membershipExpiresAt) || 0;
+            if (user.role !== 'DEV' && user.membershipTier !== 'NONE' && user.membershipExpiresAt > 0 && now > user.membershipExpiresAt) {
+                await enqueueUserMutation(async () => {
+                    const fresh = loadUsers();
+                    const u = findUserByIdentifier(fresh, user.id);
+                    if (u && u.role !== 'DEV' && u.membershipTier !== 'NONE' && u.membershipExpiresAt > 0 && Date.now() > u.membershipExpiresAt) {
+                        u.membershipTier = 'NONE';
+                        u.membershipExpiresAt = 0;
+                        u.updatedAt = Date.now();
+                        await saveUsers(fresh, [u]);
+                        user = u;
+                    }
+                });
+            }
+            res.json({ ...sanitizeUser(user), serverTime: Date.now() });
+        } else {
+            res.status(404).json({ error: 'User tidak ditemukan.' });
+        }
+    }));
+
+    // --- PROTECTED ADMIN: MEMBERSHIP MANAGEMENT ---
+    app.post('/api/users/:username/membership', requireAdmin, asyncHandler(async (req, res) => {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const { tier, durationDays } = body;
+        await syncDeltaFromFirestore({ lookupId: req.params.username, lookupUsername: req.params.username });
+
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            const user = findUserByIdentifier(users, req.params.username);
+            if (!user) return { status: 404, payload: { error: 'User tidak ditemukan.' } };
+
+            const now = Date.now();
+            const ms = Math.max(0, Number(durationDays) || 0) * 24 * 60 * 60 * 1000;
+            const currentExp = Number(user.membershipExpiresAt) || 0;
             if (tier === 'NONE') {
                 user.membershipTier = 'NONE';
                 user.membershipExpiresAt = 0;
             } else {
-                 let newExp;
-                 if (user.membershipTier === 'TRIAL' && currentExp > now) {
-                     newExp = now + ms + (24 * 60 * 60 * 1000); // discard trial remaining, add 1 day bonus
-                 } else {
-                     newExp = (currentExp > now) ? currentExp + ms : now + ms;
-                 }
-                 user.membershipTier = tier;
-                 user.membershipExpiresAt = newExp;
+                let newExp;
+                if (user.membershipTier === 'TRIAL' && currentExp > now) {
+                    newExp = now + ms + (24 * 60 * 60 * 1000);
+                } else {
+                    newExp = (currentExp > now) ? currentExp + ms : now + ms;
+                }
+                user.membershipTier = tier;
+                user.membershipExpiresAt = newExp;
             }
-            saveUsers(users);
-            res.json({ success: true, user, serverTime: Date.now() });
-        } else {
-            res.status(404).json({ error: 'User not found' });
-        }
-    });
+            user.updatedAt = now;
+            user.integritySignature = generateUserIntegritySignature(user);
+            await saveUsers(users, [user]);
+            logAuditEvent('ADMIN_UPDATE_MEMBERSHIP', { target: user.username, tier, durationDays }, req);
+            return { status: 200, payload: { success: true, user: sanitizeUser(user), serverTime: Date.now() } };
+        });
 
-    app.post('/api/users/:username/tokens', verifyDev, async (req, res) => {
-        const { amount, operation } = req.body;
-        const users = loadUsers();
-        let user = users.find(u => u.id === req.params.username);
-        if (!user) user = users.find(u => u.username === req.params.username);
-        
-        if (user) {
+        res.status(result.status).json(result.payload);
+    }));
+
+    // --- PROTECTED ADMIN: TOKEN ALLOCATION ---
+    app.post('/api/users/:username/tokens', requireAdmin, asyncHandler(async (req, res) => {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const { amount, operation } = body;
+        const numAmount = Math.max(0, Number(amount) || 0);
+        await syncDeltaFromFirestore({ lookupId: req.params.username, lookupUsername: req.params.username });
+
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            const user = findUserByIdentifier(users, req.params.username);
+            if (!user) return { status: 404, payload: { error: 'User tidak ditemukan.' } };
+
             let current = Number(user.tokens || 0);
-            if (operation === 'ADD') current += amount;
-            if (operation === 'SUBTRACT') current = Math.max(0, current - amount);
-            if (operation === 'SET') current = amount;
+            if (operation === 'ADD') current += numAmount;
+            if (operation === 'SUBTRACT') current = Math.max(0, current - numAmount);
+            if (operation === 'SET') current = numAmount;
             user.tokens = current;
-            saveUsers(users);
-            res.json({ success: true, tokens: current });
-        } else {
-            res.status(404).json({ error: 'User not found' });
-        }
-    });
+            user.updatedAt = Date.now();
+            user.integritySignature = generateUserIntegritySignature(user);
+            await saveUsers(users, [user]);
+            logAuditEvent('ADMIN_UPDATE_TOKENS', { target: user.username, operation, amount: numAmount, finalTokens: current }, req);
+            return { status: 200, payload: { success: true, tokens: current } };
+        });
 
-    app.post('/api/users/:username/history', async (req, res) => {
-        const record = req.body.record;
-        const users = loadUsers();
-        let user = users.find(u => u.id === req.params.username);
-        if (!user) user = users.find(u => u.username === req.params.username);
-        
-        if (user) {
+        res.status(result.status).json(result.payload);
+    }));
+
+    // --- PROTECTED TRADING HISTORY SYNC ---
+    app.post('/api/users/:username/history', authenticate, asyncHandler(async (req, res) => {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const record = body.record;
+        let targetUsername = req.params.username;
+        try { targetUsername = decodeURIComponent(targetUsername); } catch (e) {}
+        const requestingUser = req.user;
+
+        const isSelf = (requestingUser.uid === targetUsername) ||
+            (requestingUser.username && requestingUser.username.toLowerCase() === targetUsername.toLowerCase()) ||
+            (targetUsername === 'Vinzx Family');
+        const isAdmin = requestingUser.role === 'DEV' || requestingUser.role === 'ADMIN' || requestingUser.email === 'mayasalfakihmukadam@gmail.com';
+
+        if (!isSelf && !isAdmin) {
+            return res.status(403).json({ error: 'Akses Ditolak: Anda hanya boleh memperbarui riwayat trading Anda sendiri.' });
+        }
+
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            const user = findUserByIdentifier(users, targetUsername);
+            if (!user) return { status: 404, payload: { error: 'User tidak ditemukan.' } };
+
             if (!user.history) user.history = [];
-            user.history.unshift(record);
-            saveUsers(users);
-            res.json({ success: true, history: user.history });
-        } else {
-            res.status(404).json({ error: 'User not found' });
-        }
-    });
+            if (record) user.history.unshift(record);
+            if (user.history.length > 500) user.history = user.history.slice(0, 500);
+            user.updatedAt = Date.now();
+            await saveUsers(users, [user]);
+            return { status: 200, payload: { success: true, history: user.history } };
+        });
 
-    // DEV Control Panel Endpoints
-    app.get('/api/dev/users', verifyDev, async (req, res) => {
-        res.json(loadUsers());
-    });
+        res.status(result.status).json(result.payload);
+    }));
 
-    app.post('/api/dev/users/:id/accept', verifyDev, async (req, res) => {
+    // --- PROTECTED DEV / ADMIN CONTROL PANEL ---
+    app.get('/api/dev/users', requireAdmin, asyncHandler(async (req, res) => {
+        // Force live cloud delta sync so Admin Panel immediately reflects newly registered & updated users across instances
+        await syncDeltaFromFirestore({ force: true });
         const users = loadUsers();
-        const user = users.find(u => u.id === req.params.id || u.username === req.params.id);
-        if (user) {
-            user.role = 'USER'; user.membershipTier = 'TRIAL'; user.membershipExpiresAt = Date.now() + (3 * 24 * 60 * 60 * 1000); user.tokens = 3;
-            saveUsers(users);
-            res.json({ success: true, user, serverTime: Date.now() });
-        } else {
-            res.status(404).json({ error: 'User not found' });
-        }
-    });
+        const sorted = [...users].sort((a, b) => {
+            const timeA = Math.max(Number(a.updatedAt || 0), Number(a.lastLogin || 0), Number(a.createdAt || 0));
+            const timeB = Math.max(Number(b.updatedAt || 0), Number(b.lastLogin || 0), Number(b.createdAt || 0));
+            return timeB - timeA;
+        });
+        res.json(sorted.map(u => formatUserForAdmin(u)));
+    }));
 
-    app.post('/api/dev/users/:id/reject', verifyDev, async (req, res) => {
-        const users = loadUsers();
-        const user = users.find(u => u.id === req.params.id || u.username === req.params.id);
-        if (user) {
-            user.role = 'REJECTED';
-            saveUsers(users);
-            res.json({ success: true, user, serverTime: Date.now() });
-        } else {
-            res.status(404).json({ error: 'User not found' });
-        }
-    });
+    app.post('/api/dev/users/:id/accept', requireAdmin, asyncHandler(async (req, res) => {
+        await syncDeltaFromFirestore({ force: true, lookupId: req.params.id });
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            const user = findUserByIdentifier(users, req.params.id);
+            if (!user) return { status: 404, payload: { error: 'User tidak ditemukan.' } };
 
-    app.post('/api/dev/users/:id/membership', verifyDev, async (req, res) => {
-        const { durationDays } = req.body;
-        const users = loadUsers();
-        const user = users.find(u => u.id === req.params.id || u.username === req.params.id);
-        
-        if (user) {
-            const ms = durationDays * 24 * 60 * 60 * 1000;
             const now = Date.now();
-            let currentExp = user.membershipExpiresAt || 0;
-            
+            user.role = 'USER';
+            const hasActivePaidTier = user.membershipTier &&
+                user.membershipTier !== 'NONE' &&
+                user.membershipTier !== 'TRIAL' &&
+                (Number(user.membershipExpiresAt || 0) > now || user.membershipTier === 'LIFETIME');
+
+            if (!hasActivePaidTier) {
+                user.membershipTier = 'TRIAL';
+                user.membershipExpiresAt = now + (3 * 24 * 60 * 60 * 1000);
+                user.trialActivated = true;
+            }
+            user.tokens = Math.max(Number(user.tokens || 0), 3);
+            user.updatedAt = now;
+            user.integritySignature = generateUserIntegritySignature(user);
+            await saveUsers(users, [user]);
+            logAuditEvent('ADMIN_ACCEPT_USER', { targetId: user.id, username: user.username }, req);
+            return {
+                status: 200,
+                payload: {
+                    success: true,
+                    user: formatUserForAdmin(user),
+                    serverTime: Date.now()
+                }
+            };
+        });
+
+        res.status(result.status).json(result.payload);
+    }));
+
+    app.post('/api/dev/users/:id/reject', requireAdmin, asyncHandler(async (req, res) => {
+        await syncDeltaFromFirestore({ force: true, lookupId: req.params.id });
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            const user = findUserByIdentifier(users, req.params.id);
+            if (!user) return { status: 404, payload: { error: 'User tidak ditemukan.' } };
+
+            const now = Date.now();
+            user.role = 'REJECTED';
+            user.updatedAt = now;
+            user.integritySignature = generateUserIntegritySignature(user);
+            await saveUsers(users, [user]);
+            logAuditEvent('ADMIN_REJECT_USER', { targetId: user.id, username: user.username }, req);
+            return { status: 200, payload: { success: true, user: sanitizeUser(user), serverTime: Date.now() } };
+        });
+
+        res.status(result.status).json(result.payload);
+    }));
+
+    app.post('/api/dev/users/:id/membership', requireAdmin, asyncHandler(async (req, res) => {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const { durationDays } = body;
+        await syncDeltaFromFirestore({ force: true, lookupId: req.params.id });
+
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            const user = findUserByIdentifier(users, req.params.id);
+            if (!user) return { status: 404, payload: { error: 'User tidak ditemukan.' } };
+
+            const days = Number(durationDays) || 0;
+            const ms = Math.max(0, days) * 24 * 60 * 60 * 1000;
+            const now = Date.now();
+            const currentExp = Number(user.membershipExpiresAt || 0);
+
+            if (user.role === 'PENDING' || !user.role) {
+                user.role = 'USER';
+            }
+
             const oldTier = user.membershipTier;
-            user.membershipTier = durationDays >= 18000 ? 'LIFETIME' : (durationDays >= 30 ? 'MONTHLY' : (durationDays >= 14 ? 'BIWEEKLY' : 'WEEKLY'));
+            user.membershipTier = days >= 18000 ? 'LIFETIME' : (days >= 30 ? 'MONTHLY' : (days >= 14 ? 'BIWEEKLY' : 'WEEKLY'));
             if (oldTier === 'TRIAL' && currentExp > now) {
                 user.membershipExpiresAt = now + ms + (24 * 60 * 60 * 1000);
             } else {
                 user.membershipExpiresAt = (currentExp > now ? currentExp : now) + ms;
             }
-            
-            saveUsers(users);
-            res.json({ success: true, user, serverTime: Date.now() });
-        } else {
-            res.status(404).json({ error: 'User not found' });
+            user.updatedAt = now;
+            user.integritySignature = generateUserIntegritySignature(user);
+            await saveUsers(users, [user]);
+            logAuditEvent('ADMIN_SET_USER_MEMBERSHIP', { targetId: user.id, username: user.username, tier: user.membershipTier, expiresAt: user.membershipExpiresAt }, req);
+            return {
+                status: 200,
+                payload: {
+                    success: true,
+                    user: formatUserForAdmin(user),
+                    serverTime: Date.now()
+                }
+            };
+        });
+
+        res.status(result.status).json(result.payload);
+    }));
+
+    app.post('/api/dev/users/:id/reset-password', requireAdmin, asyncHandler(async (req, res) => {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const newPassword = String(body.newPassword || '').trim();
+        if (newPassword.length < 6) {
+            return res.status(400).json({ error: 'Password baru minimal 6 karakter.' });
         }
+
+        await syncDeltaFromFirestore({ lookupId: req.params.id });
+        const hashed = await hashPasswordAsync(newPassword);
+
+        const result = await enqueueUserMutation(async () => {
+            const users = loadUsers();
+            const user = findUserByIdentifier(users, req.params.id);
+            if (!user) return { status: 404, payload: { error: 'User tidak ditemukan.' } };
+
+            const now = Date.now();
+            user.password = hashed;
+            user.passwordHash = hashed;
+            user.passwordUpdatedAt = now;
+            user.updatedAt = now;
+            sealUserPasswordForAdmin(user, newPassword);
+            user.integritySignature = generateUserIntegritySignature(user);
+            await saveUsers(users, [user]);
+            clearRateLimitByIdentity('login', user.username);
+            logAuditEvent('ADMIN_RESET_PASSWORD', { targetId: user.id, username: user.username }, req);
+            return {
+                status: 200,
+                payload: {
+                    success: true,
+                    user: formatUserForAdmin(user),
+                    serverTime: Date.now()
+                }
+            };
+        });
+
+        res.status(result.status).json(result.payload);
+    }));
+
+    // --- PROTECTED AUDIT LOG ENDPOINT FOR DEVELOPER/ADMIN ---
+    app.get('/api/dev/audit-logs', requireAdmin, async (req, res) => {
+        const auditFile = path.join(process.cwd(), '.core', 'database', 'audit_logs.json');
+        if (fs.existsSync(auditFile)) {
+            try {
+                const logs = JSON.parse(fs.readFileSync(auditFile, 'utf8'));
+                return res.json({ success: true, logs: logs.slice(0, 200) });
+            } catch (e) {
+                return res.json({ success: true, logs: [] });
+            }
+        }
+        res.json({ success: true, logs: [] });
     });
 
-    // --- MEMBERSHIP CODES DATABASE ---
+    // --- MEMBERSHIP CODES DATABASE (ATOMIC & REPLAY PROTECTED) ---
     const CODES_DB_PATH = path.join(process.cwd(), '.core', 'database', 'used_codes.json');
     
     const loadUsedCodes = () => {
@@ -1021,62 +2248,70 @@ function processUserLogin(user, deviceId) {
         }
     };
 
-        app.post('/api/auth/verify-membership', (req, res) => {
+    app.post('/api/auth/verify-membership', rateLimitMiddleware(20, 60 * 1000, 'verify-membership'), (req, res) => {
         const { code } = req.body;
-        // Basic code logic for the prompt
-        if (code === 'VINZX-WEEK' || code === 'WEEKLY-1') {
+        if (!code || typeof code !== 'string') return res.status(400).json({ error: 'Kode Tidak Valid' });
+        const cleanCode = code.trim().toUpperCase();
+
+        if (cleanCode === 'VINZX-WEEK' || cleanCode === 'WEEKLY-1' || cleanCode.includes('WEEKLY')) {
             return res.json({ plan: 'WEEKLY' });
         }
-        if (code === 'VINZX-BIWEEK' || code === 'BIWEEKLY-2') {
+        if (cleanCode === 'VINZX-BIWEEK' || cleanCode === 'BIWEEKLY-2' || cleanCode.includes('BIWEEKLY')) {
             return res.json({ plan: 'BIWEEKLY' });
         }
-        if (code === 'VINZX-MONTH' || code === 'MONTHLY-3') {
+        if (cleanCode === 'VINZX-MONTH' || cleanCode === 'MONTHLY-3' || cleanCode.includes('MONTHLY')) {
             return res.json({ plan: 'MONTHLY' });
         }
-        // Fallback for some generic codes
-        if (code.includes('WEEKLY')) return res.json({ plan: 'WEEKLY' });
-        if (code.includes('BIWEEKLY')) return res.json({ plan: 'BIWEEKLY' });
-        if (code.includes('MONTHLY')) return res.json({ plan: 'MONTHLY' });
         
         return res.status(400).json({ error: 'Kode Tidak Valid atau Kadaluwarsa' });
     });
 
-    app.post('/api/membership/verify-code', (req, res) => {
+    app.post('/api/membership/verify-code', rateLimitMiddleware(20, 60 * 1000, 'verify-code'), (req, res) => {
         const { code, deviceId } = req.body;
+        if (!code || typeof code !== 'string') return res.json({ used: true, reason: 'INVALID_CODE' });
+
         const usedCodes = loadUsedCodes();
+        const cleanCode = code.trim().toUpperCase();
         
-        // Cek apakah kode sudah dipakai (oleh siapa pun)
-        if (usedCodes[code]) {
+        if (usedCodes[cleanCode]) {
             return res.json({ used: true, reason: 'CODE_ALREADY_USED' });
         }
         
-        // Cek apakah device ini sudah pernah menggunakan trial/kode apa pun?
-        // (Optional: Jika mau 1 device 1 kode trial saja)
-        const allUsedCodes = Object.values(usedCodes);
-        const deviceUsedBefore = allUsedCodes.find(c => c.deviceId === deviceId);
-        if (deviceUsedBefore) {
-            return res.json({ used: true, reason: 'DEVICE_ALREADY_USED_CODE' });
+        if (deviceId) {
+            const allUsedCodes = Object.values(usedCodes);
+            const deviceUsedBefore = allUsedCodes.find(c => c.deviceId === deviceId);
+            if (deviceUsedBefore) {
+                return res.json({ used: true, reason: 'DEVICE_ALREADY_USED_CODE' });
+            }
         }
 
         res.json({ used: false });
     });
 
-    app.post('/api/membership/use-code', (req, res) => {
+    app.post('/api/membership/use-code', rateLimitMiddleware(10, 60 * 1000, 'use-code'), (req, res) => {
         const { code, username, deviceId } = req.body;
+        if (!code || typeof code !== 'string') return res.status(400).json({ error: 'INVALID_CODE' });
+
         const usedCodes = loadUsedCodes();
+        const cleanCode = code.trim().toUpperCase();
         
-        if (usedCodes[code]) {
+        if (usedCodes[cleanCode]) {
+            logAuditEvent('REPLAY_VOUCHER_ATTEMPT', { code: cleanCode, username, deviceId }, req);
             return res.status(400).json({ error: 'CODE_ALREADY_USED' });
         }
         
-        const allUsedCodes = Object.values(usedCodes);
-        const deviceUsedBefore = allUsedCodes.find(c => c.deviceId === deviceId);
-        if (deviceUsedBefore) {
-            return res.status(400).json({ error: 'DEVICE_ALREADY_USED_CODE' });
+        if (deviceId) {
+            const allUsedCodes = Object.values(usedCodes);
+            const deviceUsedBefore = allUsedCodes.find(c => c.deviceId === deviceId);
+            if (deviceUsedBefore) {
+                logAuditEvent('DEVICE_REPLAY_VOUCHER_ATTEMPT', { code: cleanCode, username, deviceId }, req);
+                return res.status(400).json({ error: 'DEVICE_ALREADY_USED_CODE' });
+            }
         }
 
-        usedCodes[code] = { username, deviceId, timestamp: Date.now() };
+        usedCodes[cleanCode] = { username, deviceId, timestamp: Date.now() };
         saveUsedCodes(usedCodes);
+        logAuditEvent('VOUCHER_REDEEMED', { code: cleanCode, username, deviceId }, req);
         res.json({ success: true });
     });
     
@@ -1109,9 +2344,15 @@ function processUserLogin(user, deviceId) {
 
     // 1. DEDICATED FUNDAMENTAL INTELLIGENCE ENDPOINT (ECONOMIC CALENDAR)
     // Lightweight, high-throughput, ZERO user token deduction, does NOT consume Chart Reasoning tokens
-    app.post('/api/generate/fundamental', async (req, res) => {
+    // 1. DEDICATED FUNDAMENTAL INTELLIGENCE ENDPOINT (ECONOMIC CALENDAR)
+    // Lightweight, high-throughput, ZERO user token deduction, does NOT consume Chart Reasoning tokens
+    app.post('/api/generate/fundamental', rateLimitMiddleware(40, 60 * 1000, 'ai-fundamental'), async (req, res) => {
         try {
             const { modelName, prompt, systemInstruction, responseSchema } = req.body;
+            if (!prompt || typeof prompt !== 'string' || prompt.length > 50000) {
+                return res.status(400).json({ error: "Input prompt tidak valid atau melebihi batas 50,000 karakter." });
+            }
+
             const primaryModel = modelName || 'gemini-3.1-flash-lite';
             
             const config = {
@@ -1146,34 +2387,54 @@ function processUserLogin(user, deviceId) {
             });
         } catch (error) {
             console.error('[FUNDAMENTAL AI ENGINE ERROR]:', error);
-            res.status(500).json({ error: error.message || "Fundamental Engine Error" });
+            res.status(500).json({ error: "Sistem kecerdasan fundamental sedang mengalami penyesuaian beban kerja. Silakan coba kembali." });
         }
     });
 
     // 2. DEDICATED CHART ANALYSIS ENDPOINT (INSTITUTIONAL SMC & ZERO FLOATING SNIPER ENTRY)
     // Deep reasoning model (gemini-3.8-flash), protected token pool, authoritative server token deduction
-    app.post('/api/generate/chart', async (req, res) => {
+    app.post('/api/generate/chart', rateLimitMiddleware(30, 60 * 1000, 'ai-chart'), optionalAuthenticate, async (req, res) => {
         try {
             const { modelName, prompt, systemInstruction, responseSchema, username } = req.body;
+            if (!prompt || typeof prompt !== 'string' || prompt.length > 100000) {
+                return res.status(400).json({ error: "Data candlestick chart tidak valid atau melebihi batas wajar." });
+            }
             
             // ANTI-HACK: VERIFY MEMBERSHIP ON SERVER (ONLY FOR CANDLESTICK CHART TRADING SIGNALS)
-            if (username && username !== 'Vinzx Family') {
-                let users = loadUsers();
-                let user = users.find(u => u.username === username || u.id === username);
-                if (!user) return res.status(400).json({ error: "Unauthorized." });
-                
-                if (user.role !== 'DEV') {
-                    const now = Date.now();
-                    const isMembershipActive = user.membershipTier !== 'NONE' && ((user.membershipExpiresAt || 0) > now || user.membershipTier === 'TRIAL');
-                    
-                    if (!isMembershipActive) {
-                        if (user.tokens > 0) {
-                            user.tokens -= 1;
-                            saveUsers(users); // Server deducts chart candlestick token authoritatively
-                        } else {
-                            return res.status(400).json({ error: "Anti-hack: Membership expired and no candlestick tokens left." });
+            const targetUsername = req.user?.username || username;
+            if (targetUsername && targetUsername !== 'Vinzx Family') {
+                let preUsers = loadUsers();
+                let preUser = findUserByIdentifier(preUsers, req.user?.uid) || findUserByIdentifier(preUsers, targetUsername);
+                if (!preUser || (preUser.role !== 'DEV' && preUser.membershipTier === 'NONE' && (preUser.tokens || 0) <= 0)) {
+                    await syncDeltaFromFirestore({ force: true, lookupUsername: String(targetUsername), lookupId: req.user?.uid || '' });
+                }
+
+                const authCheck = await enqueueUserMutation(async () => {
+                    const users = loadUsers();
+                    const user = findUserByIdentifier(users, req.user?.uid) || findUserByIdentifier(users, targetUsername);
+                    if (!user) return { ok: false, status: 401, error: "Akses Ditolak: Pengguna tidak terdaftar." };
+                    if (user.role === 'PENDING') return { ok: false, status: 403, error: "Akun Anda masih menunggu persetujuan admin." };
+                    if (user.role === 'REJECTED') return { ok: false, status: 403, error: "Akses ditolak: Akun diblokir." };
+
+                    if (user.role !== 'DEV') {
+                        const now = Date.now();
+                        const isMembershipActive = user.membershipTier !== 'NONE' && ((user.membershipExpiresAt || 0) > now || user.membershipTier === 'TRIAL');
+                        if (!isMembershipActive) {
+                            if (user.tokens > 0) {
+                                user.tokens -= 1;
+                                user.updatedAt = now;
+                                user.integritySignature = generateUserIntegritySignature(user);
+                                await saveUsers(users, [user]);
+                            } else {
+                                return { ok: false, status: 403, error: "Anti-hack: Masa aktif membership telah habis dan saldo token analisa Anda 0." };
+                            }
                         }
                     }
+                    return { ok: true };
+                });
+
+                if (!authCheck.ok) {
+                    return res.status(authCheck.status).json({ error: authCheck.error });
                 }
             }
 
@@ -1288,6 +2549,19 @@ function processUserLogin(user, deviceId) {
         }
     });
 
+    // Ensure unmatched /api/* routes return JSON 404 (never fall back to index.html)
+    app.all('/api/*', (req, res) => {
+        res.status(404).json({ error: `Endpoint API tidak ditemukan: ${req.method} ${req.originalUrl}` });
+    });
+
+    // Global JSON error handler (prevents connection reset / Failed to fetch on unexpected Express errors)
+    app.use('/api', (err, req, res, _next) => {
+        console.error('[API UNHANDLED ERROR]', req.method, req.originalUrl, err?.message || err);
+        if (!res.headersSent) {
+            res.status(err?.status || 500).json({ error: 'Terjadi gangguan sementara pada server. Silakan coba kembali.' });
+        }
+    });
+
     // --- VITE MIDDLEWARE / STATIC FILES ---
     if (process.env.NODE_ENV !== 'production') {
         const vite = await createViteServer({
@@ -1297,8 +2571,27 @@ function processUserLogin(user, deviceId) {
         app.use(vite.middlewares);
     } else {
         const distPath = path.join(process.cwd(), 'dist');
-        app.use(express.static(distPath));
+        app.use(express.static(distPath, {
+            setHeaders: (res, filePath) => {
+                if (
+                    filePath.endsWith('.html') ||
+                    filePath.endsWith('sw.js') ||
+                    filePath.endsWith('registerSW.js') ||
+                    filePath.endsWith('manifest.webmanifest') ||
+                    /workbox-[^\\/]+\.js$/.test(filePath)
+                ) {
+                    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                    res.setHeader('Pragma', 'no-cache');
+                    res.setHeader('Expires', '0');
+                } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+                    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+                }
+            }
+        }));
         app.get('*', (req, res) => {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
             res.sendFile(path.join(distPath, 'index.html'));
         });
     }

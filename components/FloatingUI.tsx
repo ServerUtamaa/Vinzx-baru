@@ -6,8 +6,10 @@ import { Asset, Candle, AnalysisResult, TimeFrame, TradeFeedback, VoiceGender, U
 import { checkMarketStatus } from '../utils/marketHours';
 import { validateMembershipCode } from '../.core/constants/membershipCodes';
 import { updateUserMembership, updateUserRole, isCodeUsed, markCodeAsUsed } from '../services/databaseService';
-import { formatPrice, formatPriceParts, calculateSpreadPips, getAssetPrecision } from '../utils/priceFormatters';
+import { formatPrice, formatPriceParts, calculateSpreadPips, calculatePipsDiff, assetUsesPips, getAssetPrecision } from '../utils/priceFormatters';
+import { getTimeframePlanSpec } from '../core/timeframePlan';
 import FundamentalData from './FundamentalData';
+import SessionSchedulePage from './SessionSchedulePage';
 
 interface FloatingUIProps {
   currentAsset: Asset;
@@ -172,93 +174,205 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
   // DEV Control State
   const [devUsers, setDevUsers] = useState<any[]>([]);
   const [isFetchingDevUsers, setIsFetchingDevUsers] = useState(false);
+  const [devFetchError, setDevFetchError] = useState<string | null>(null);
+  const [devActionStatus, setDevActionStatus] = useState<{ text: string; type: 'SUCCESS' | 'ERROR' } | null>(null);
+  const [confirmRejectUserId, setConfirmRejectUserId] = useState<string | null>(null);
+  const [resetPwUserId, setResetPwUserId] = useState<string | null>(null);
+  const [resetPwValue, setResetPwValue] = useState<string>('');
+  const [isResettingPw, setIsResettingPw] = useState(false);
   const [devActiveTab, setDevActiveTab] = useState<'ALL' | 'APPROVAL' | 'MEMBERSHIP' | 'REJECTED'>('ALL');
   const [devSearchQuery, setDevSearchQuery] = useState("");
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
+  const [hiddenPwMap, setHiddenPwMap] = useState<Record<string, boolean>>({});
+  const [copiedCredKey, setCopiedCredKey] = useState<string | null>(null);
+
+  const handleCopyCredential = (fieldKey: string, value: string) => {
+      if (!value) return;
+      const fallbackCopy = () => {
+          try {
+              const el = document.createElement('textarea');
+              el.value = value;
+              el.setAttribute('readonly', '');
+              el.style.position = 'fixed';
+              el.style.opacity = '0';
+              document.body.appendChild(el);
+              el.select();
+              el.setSelectionRange(0, value.length);
+              document.execCommand('copy');
+              document.body.removeChild(el);
+          } catch (e) {}
+      };
+      try {
+          if (navigator?.clipboard?.writeText) {
+              navigator.clipboard.writeText(value).catch(() => fallbackCopy());
+          } else {
+              fallbackCopy();
+          }
+          setCopiedCredKey(fieldKey);
+          setTimeout(() => {
+              setCopiedCredKey(prev => (prev === fieldKey ? null : prev));
+          }, 1800);
+      } catch (e) {
+          fallbackCopy();
+      }
+  };
 
   useEffect(() => {
       if (showHamburgerMenu && userSession.role === 'DEV') {
           fetchDevUsers();
       }
-  }, [showHamburgerMenu, userSession.role]);
+  }, [showHamburgerMenu, userSession.role, devActiveTab]);
 
   const fetchDevUsers = async () => {
       setIsFetchingDevUsers(true);
+      setDevFetchError(null);
       try {
-          const token = localStorage.getItem('DEV_TOKEN') || '';
+          const token = localStorage.getItem('AUTH_TOKEN') || localStorage.getItem('DEV_TOKEN') || '';
           const res = await fetch('/api/dev/users', {
               headers: { 
+                  'Authorization': `Bearer ${token}`,
                   'x-dev-token': token
-              }
+              },
+              credentials: 'same-origin',
+              cache: 'no-store'
           });
-          if (!res.ok) throw new Error('Failed to fetch');
+          if (!res.ok) {
+              const errData = await res.json().catch(() => ({}));
+              throw new Error(errData.error || `Gagal memuat data user (${res.status})`);
+          }
           const usersList = await res.json();
           if (Array.isArray(usersList)) {
-              setDevUsers(usersList);
+              const cleanList = usersList.filter((u: any) => u && typeof u === 'object' && (u.id || u.username));
+              setDevUsers(cleanList);
           }
       } catch (e: any) {
           console.error("Failed to fetch dev users", e);
+          setDevFetchError(e?.message || 'Sesi Admin kedaluwarsa atau gagal terhubung ke server.');
       } finally {
           setIsFetchingDevUsers(false);
       }
   };
 
   const handleAcceptUser = async (userId: string) => {
-      if (!confirm('Terima pendaftaran user ini?')) return;
+      setDevActionStatus(null);
       try {
-          const token = localStorage.getItem('DEV_TOKEN') || '';
-          const res = await fetch(`/api/dev/users/${userId}/accept`, {
+          const token = localStorage.getItem('AUTH_TOKEN') || localStorage.getItem('DEV_TOKEN') || '';
+          const res = await fetch(`/api/dev/users/${encodeURIComponent(userId)}/accept`, {
               method: 'POST',
               headers: {
+                  'Authorization': `Bearer ${token}`,
                   'x-dev-token': token
-              }
+              },
+              credentials: 'same-origin'
           });
-          if (!res.ok) throw new Error('Failed to accept');
-          alert('User Diterima! User sekarang dapat login.');
-          fetchDevUsers();
-      } catch (e) {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+              throw new Error(data.error || 'Gagal menerima user');
+          }
+          setDevActionStatus({
+              text: `User "${data?.user?.username || userId}" diterima! Kini aktif di tab MEMBERSHIP dan sudah dapat login.`,
+              type: 'SUCCESS'
+          });
+          await fetchDevUsers();
+      } catch (e: any) {
           console.error("Failed to accept user", e);
-          alert('Error koneksi atau akses ditolak.');
+          setDevActionStatus({ text: e?.message || 'Error koneksi atau akses ditolak.', type: 'ERROR' });
       }
   };
 
   const handleRejectUser = async (userId: string) => {
-      if (!confirm('Tolak registrasi ini?')) return;
+      if (confirmRejectUserId !== userId) {
+          setConfirmRejectUserId(userId);
+          return;
+      }
+      setConfirmRejectUserId(null);
+      setDevActionStatus(null);
       try {
-          const token = localStorage.getItem('DEV_TOKEN') || '';
-          const res = await fetch(`/api/dev/users/${userId}/reject`, {
+          const token = localStorage.getItem('AUTH_TOKEN') || localStorage.getItem('DEV_TOKEN') || '';
+          const res = await fetch(`/api/dev/users/${encodeURIComponent(userId)}/reject`, {
               method: 'POST',
               headers: {
+                  'Authorization': `Bearer ${token}`,
                   'x-dev-token': token
-              }
+              },
+              credentials: 'same-origin'
           });
-          if (!res.ok) throw new Error('Failed to reject');
-          alert('Registrasi Ditolak.');
-          fetchDevUsers();
-      } catch (e) {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+              throw new Error(data.error || 'Gagal menolak user');
+          }
+          setDevActionStatus({ text: 'Akses user berhasil ditolak / diblokir.', type: 'SUCCESS' });
+          await fetchDevUsers();
+      } catch (e: any) {
           console.error("Failed to reject user", e);
-          alert('Error koneksi atau akses ditolak.');
+          setDevActionStatus({ text: e?.message || 'Error koneksi atau akses ditolak.', type: 'ERROR' });
       }
   };
 
   const handleAddMembership = async (userId: string, durationDays: number) => {
-      if (!confirm(`Tambahkan membership ${durationDays} Hari untuk user ini?`)) return;
+      setDevActionStatus(null);
       try {
-          const token = localStorage.getItem('DEV_TOKEN') || '';
-          const res = await fetch(`/api/dev/users/${userId}/membership`, {
+          const token = localStorage.getItem('AUTH_TOKEN') || localStorage.getItem('DEV_TOKEN') || '';
+          const res = await fetch(`/api/dev/users/${encodeURIComponent(userId)}/membership`, {
               method: 'POST',
               headers: {
                   'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${token}`,
                   'x-dev-token': token
               },
+              credentials: 'same-origin',
               body: JSON.stringify({ durationDays })
           });
-          if (!res.ok) throw new Error('Failed to add membership');
-          alert(`Berhasil menambahkan membership ${durationDays} hari!`);
-          fetchDevUsers();
-      } catch (e) {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+              throw new Error(data.error || 'Gagal memperbarui membership');
+          }
+          setDevActionStatus({
+              text: `Berhasil menambahkan membership ${durationDays} hari untuk "${data?.user?.username || userId}"!`,
+              type: 'SUCCESS'
+          });
+          await fetchDevUsers();
+      } catch (e: any) {
           console.error("Failed to update membership", e);
-          alert('Error koneksi atau akses ditolak.');
+          setDevActionStatus({ text: e?.message || 'Error koneksi atau akses ditolak.', type: 'ERROR' });
+      }
+  };
+
+  const handleResetUserPassword = async (userId: string) => {
+      const cleanPw = resetPwValue.trim();
+      if (cleanPw.length < 6) {
+          setDevActionStatus({ text: 'Password baru minimal 6 karakter.', type: 'ERROR' });
+          return;
+      }
+      setIsResettingPw(true);
+      setDevActionStatus(null);
+      try {
+          const token = localStorage.getItem('AUTH_TOKEN') || localStorage.getItem('DEV_TOKEN') || '';
+          const res = await fetch(`/api/dev/users/${encodeURIComponent(userId)}/reset-password`, {
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${token}`,
+                  'x-dev-token': token
+              },
+              credentials: 'same-origin',
+              body: JSON.stringify({ newPassword: cleanPw })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+              throw new Error(data.error || 'Gagal mereset password');
+          }
+          setResetPwUserId(null);
+          setResetPwValue('');
+          setDevActionStatus({
+              text: `Password untuk "${data?.user?.username || userId}" berhasil diperbarui! User kini dapat login.`,
+              type: 'SUCCESS'
+          });
+          await fetchDevUsers();
+      } catch (e: any) {
+          setDevActionStatus({ text: e?.message || 'Gagal mereset password.', type: 'ERROR' });
+      } finally {
+          setIsResettingPw(false);
       }
   };
 
@@ -450,12 +564,18 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
     const isBuy = analysis.signal === 'BUY';
     const mainColor = isBuy ? 'text-[#00ff9d]' : 'text-[#ff0055]';
     const bgGlow = isBuy ? 'shadow-[0_0_30px_-10px_rgba(0,255,157,0.1)]' : 'shadow-[0_0_30px_-10px_rgba(255,0,85,0.1)]';
+    const activeTf = (analysis.timeframe || currentTimeframe) as TimeFrame;
+    const planSpec = getTimeframePlanSpec(currentAsset, activeTf);
+    const usesPips = assetUsesPips(currentAsset);
+    const slDistPips = Math.abs(calculatePipsDiff(analysis.entryPrice, analysis.stopLoss, currentAsset));
+    const tpDistPips = Math.abs(calculatePipsDiff(analysis.takeProfit, analysis.entryPrice, currentAsset));
+    const unitLabel = usesPips ? 'pips' : 'pts';
     return (
       <div className={`mt-2 w-full bg-[#0a0a0a] border border-zinc-800 rounded-xl overflow-hidden ${bgGlow} relative z-10 transition-all duration-500`}>
         <div className={`flex justify-between items-center px-4 py-2 border-b border-zinc-800 relative overflow-hidden`}>
             <div className={`absolute top-0 left-0 w-full h-[2px] ${isBuy ? 'bg-[#00ff9d]' : 'bg-[#ff0055]'}`}></div>
             <div className="flex flex-col">
-                <span className={`text-[9px] font-black tracking-[0.2em] ${mainColor} uppercase`}>ENTRY SIGNAL</span>
+                <span className={`text-[9px] font-black tracking-[0.2em] ${mainColor} uppercase`}>{planSpec.modeName} · {activeTf}</span>
                 <span className={`text-2xl font-black ${mainColor} leading-none mt-1`}>{analysis.signal}</span>
             </div>
             <div className="flex items-center gap-4">
@@ -472,9 +592,21 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
             </div>
         </div>
         <div className="grid grid-cols-3 border-b border-zinc-800 divide-x divide-zinc-800">
-             <div className="p-3 text-center"><div className="text-[8px] font-bold text-zinc-500 tracking-wider mb-1">ENTRY</div><div className="text-xs font-mono font-bold text-white">{analysis.entryPrice.toFixed(2)}</div></div>
-             <div className="p-3 text-center bg-red-900/10"><div className="text-[8px] font-bold text-red-400 tracking-wider mb-1">SL</div><div className="text-xs font-mono font-bold text-red-400">{analysis.stopLoss.toFixed(2)}</div></div>
-             <div className="p-3 text-center bg-green-900/10"><div className="text-[8px] font-bold text-green-400 tracking-wider mb-1">TP</div><div className="text-xs font-mono font-bold text-green-400">{analysis.takeProfit.toFixed(2)}</div></div>
+             <div className="p-3 text-center">
+                <div className="text-[8px] font-bold text-zinc-500 tracking-wider mb-1">ENTRY</div>
+                <div className="text-xs font-mono font-bold text-white">{formatPrice(analysis.entryPrice, currentAsset)}</div>
+                <div className="text-[8px] font-mono text-zinc-500 mt-0.5">{planSpec.modeName}</div>
+             </div>
+             <div className="p-3 text-center bg-red-900/10">
+                <div className="text-[8px] font-bold text-red-400 tracking-wider mb-1">SL</div>
+                <div className="text-xs font-mono font-bold text-red-400">{formatPrice(analysis.stopLoss, currentAsset)}</div>
+                <div className="text-[8px] font-mono text-red-400/80 mt-0.5">-{slDistPips} {unitLabel}</div>
+             </div>
+             <div className="p-3 text-center bg-green-900/10">
+                <div className="text-[8px] font-bold text-green-400 tracking-wider mb-1">TP</div>
+                <div className="text-xs font-mono font-bold text-green-400">{formatPrice(analysis.takeProfit, currentAsset)}</div>
+                <div className="text-[8px] font-mono text-green-400/80 mt-0.5">+{tpDistPips} {unitLabel}</div>
+             </div>
         </div>
         {showAnalysisLog && (
             <div className="p-4 bg-[#0a0a0a] animate-in slide-in-from-top-2 duration-300">
@@ -603,7 +735,7 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
                                 {analysis.nextPricePrediction && (
                                     <div className="flex flex-col">
                                         <span className="text-[7px] font-bold text-zinc-500 tracking-wider uppercase mb-1">NEXT PRICE TARGET</span>
-                                        <span className="text-xs font-mono font-bold text-white">{analysis.nextPricePrediction.toFixed(2)}</span>
+                                        <span className="text-xs font-mono font-bold text-white">{formatPrice(analysis.nextPricePrediction, currentAsset)}</span>
                                     </div>
                                 )}
                                 {analysis.trendPrediction && (
@@ -911,9 +1043,6 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
                                           <div className="flex items-center gap-1.5">
                                               <span className={`text-[11px] font-sans font-bold tracking-tight ${sess.text} group-hover/session:text-white transition-colors`}>
                                                   {sess.name}
-                                              </span>
-                                              <span className={`text-[8.5px] font-mono font-bold px-1.5 py-[2px] rounded border leading-none ${sess.tag}`}>
-                                                  {sess.code}
                                               </span>
                                           </div>
                                           <div className="flex items-center gap-1 text-[9.5px] font-mono tabular-nums text-zinc-400 group-hover/session:text-zinc-200 transition-colors mt-1">
@@ -1232,8 +1361,29 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
                                     <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
                                     <span className="text-[10px] font-black text-red-500 tracking-widest uppercase">Admin Override Active</span>
                                 </div>
-                                <span className="text-[9px] font-mono text-zinc-400">Total: {devUsers.length} User</span>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={fetchDevUsers}
+                                        disabled={isFetchingDevUsers}
+                                        className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[9px] font-mono font-bold transition-colors cursor-pointer"
+                                        title="Muat ulang daftar user terbaru"
+                                    >
+                                        {isFetchingDevUsers ? '...' : '↻ Refresh'}
+                                    </button>
+                                    <span className="text-[9px] font-mono text-zinc-400">Total: {devUsers.length} User</span>
+                                </div>
                             </div>
+
+                            {devActionStatus && (
+                                <div className={`p-2.5 rounded-xl border text-[10px] font-bold flex items-center justify-between gap-2 animate-in fade-in ${
+                                    devActionStatus.type === 'SUCCESS'
+                                        ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-300'
+                                        : 'bg-rose-950/50 border-rose-500/40 text-rose-300'
+                                }`}>
+                                    <span>{devActionStatus.text}</span>
+                                    <button onClick={() => setDevActionStatus(null)} className="text-zinc-400 hover:text-white text-xs cursor-pointer">✕</button>
+                                </div>
+                            )}
 
                             {/* SEARCH BAR UNTUK NAMA USERNAME */}
                             <div className="relative">
@@ -1262,6 +1412,7 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
 
                             {/* TABS: SEMUA, APPROVAL, MEMBERSHIP, REJECTED */}
                             {(() => {
+                                const validUsers = devUsers.filter(u => u && (u.id || u.username));
                                 const cleanQ = devSearchQuery.trim().toLowerCase();
                                 const filterByQuery = (u: any) => {
                                     if (!cleanQ) return true;
@@ -1275,12 +1426,12 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
                                 const isUserOnlineFn = (u: any) => (userSession && (u.username === userSession.username || (userSession.uid && u.id === userSession.uid))) || 
                                     (Boolean(u.lastLogin) && (now - u.lastLogin < 15 * 60 * 1000));
 
-                                const totalPending = devUsers.filter(u => u.role === 'PENDING').filter(filterByQuery).length;
-                                const membershipUsers = devUsers.filter(u => u.role !== 'PENDING' && u.role !== 'REJECTED' && u.role !== 'DEV').filter(filterByQuery);
+                                const totalPending = validUsers.filter(u => u.role === 'PENDING').filter(filterByQuery).length;
+                                const membershipUsers = validUsers.filter(u => u.role !== 'PENDING' && u.role !== 'REJECTED' && u.role !== 'DEV').filter(filterByQuery);
                                 const totalMembership = membershipUsers.length;
                                 const totalOnlineMembership = membershipUsers.filter(isUserOnlineFn).length;
-                                const totalRejected = devUsers.filter(u => u.role === 'REJECTED').filter(filterByQuery).length;
-                                const totalAll = devUsers.filter(u => u.role !== 'DEV').filter(filterByQuery).length;
+                                const totalRejected = validUsers.filter(u => u.role === 'REJECTED').filter(filterByQuery).length;
+                                const totalAll = validUsers.filter(u => u.role !== 'DEV').filter(filterByQuery).length;
 
                                 return (
                                     <div className="flex bg-black rounded-lg p-1 gap-1">
@@ -1326,7 +1477,26 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
                                 <div className="w-5 h-5 border-2 border-red-500 border-t-transparent rounded-full animate-spin"></div>
                                 <span>Memuat data user...</span>
                             </div>
+                        ) : devFetchError ? (
+                            <div className="p-5 bg-rose-950/30 border border-rose-500/30 rounded-2xl text-center space-y-3">
+                                <div className="text-xs font-bold text-rose-300">{devFetchError}</div>
+                                <div className="flex justify-center gap-2">
+                                    <button
+                                        onClick={fetchDevUsers}
+                                        className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider cursor-pointer"
+                                    >
+                                        Coba Muat Ulang
+                                    </button>
+                                    <button
+                                        onClick={() => { setShowHamburgerMenu(false); onLogout(); onRequestAuth(); }}
+                                        className="px-3 py-1.5 bg-red-600/80 hover:bg-red-500 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider cursor-pointer"
+                                    >
+                                        Login Ulang Admin
+                                    </button>
+                                </div>
+                            </div>
                         ) : (() => {
+                            const validUsers = devUsers.filter(u => u && (u.id || u.username));
                             const cleanQ = devSearchQuery.trim().toLowerCase();
                             const filterByQuery = (u: any) => {
                                 if (!cleanQ) return true;
@@ -1338,15 +1508,21 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
 
                             let displayUsers = [];
                             if (devActiveTab === 'APPROVAL') {
-                                displayUsers = devUsers.filter(u => u.role === 'PENDING').filter(filterByQuery);
+                                displayUsers = validUsers.filter(u => u.role === 'PENDING').filter(filterByQuery);
                             } else if (devActiveTab === 'MEMBERSHIP') {
-                                displayUsers = devUsers.filter(u => u.role !== 'PENDING' && u.role !== 'REJECTED' && u.role !== 'DEV').filter(filterByQuery);
+                                displayUsers = validUsers.filter(u => u.role !== 'PENDING' && u.role !== 'REJECTED' && u.role !== 'DEV').filter(filterByQuery);
                             } else if (devActiveTab === 'REJECTED') {
-                                displayUsers = devUsers.filter(u => u.role === 'REJECTED').filter(filterByQuery);
+                                displayUsers = validUsers.filter(u => u.role === 'REJECTED').filter(filterByQuery);
                             } else {
                                 // 'ALL' tab
-                                displayUsers = devUsers.filter(u => u.role !== 'DEV').filter(filterByQuery);
+                                displayUsers = validUsers.filter(u => u.role !== 'DEV').filter(filterByQuery);
                             }
+
+                            displayUsers = [...displayUsers].sort((a, b) => {
+                                const timeA = Math.max(Number(a.updatedAt || 0), Number(a.lastLogin || 0), Number(a.createdAt || 0));
+                                const timeB = Math.max(Number(b.updatedAt || 0), Number(b.lastLogin || 0), Number(b.createdAt || 0));
+                                return timeB - timeA;
+                            });
 
                             // If search returned empty in the current active tab, but exists in other tabs, show hint!
                             if (displayUsers.length === 0) {
@@ -1507,30 +1683,44 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
                                     masaPakaiBg = "bg-rose-500/10 border-rose-500/25";
                                 }
 
+                                const userKey = user.id || user.username;
                                 return (
-                                    <div key={user.id || user.username} className="p-4 bg-[#0a0a0a] border border-zinc-800 rounded-2xl space-y-3">
+                                    <div key={userKey} className="p-4 bg-[#0a0a0a] border border-zinc-800 rounded-2xl space-y-3">
                                         {/* USER HEADER & STATUS BADGE */}
                                         <div className="flex justify-between items-start gap-2">
-                                            <div>
-                                                <div 
-                                                    className="text-xs font-black text-white cursor-pointer hover:text-purple-400 transition-colors flex items-center gap-1.5"
-                                                    onClick={() => setExpandedUserId(expandedUserId === user.id ? null : user.id)}
+                                            <div className="min-w-0">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setExpandedUserId(expandedUserId === userKey ? null : userKey)}
+                                                    className="group text-left cursor-pointer"
                                                 >
-                                                    <span>{user.username}</span>
-                                                    <span className="text-[10px] text-zinc-500">{expandedUserId === user.id ? '▼' : '▶'}</span>
-                                                </div>
-                                                <div className="text-[9px] font-mono text-zinc-400 mt-0.5">
-                                                    ID: {user.id || user.username}
-                                                </div>
-                                                {user.email && (
-                                                    <div className="text-[8.5px] font-mono text-zinc-500">
-                                                        Email: {user.email}
+                                                    <div className="text-xs font-black text-white group-hover:text-cyan-300 transition-colors flex items-center gap-2">
+                                                        <span className="truncate">{user.username}</span>
+                                                        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-md border text-[9px] transition-all shrink-0 ${
+                                                            expandedUserId === userKey
+                                                                ? 'rotate-90 bg-cyan-500/15 border-cyan-400/40 text-cyan-300'
+                                                                : 'bg-white/[0.05] border-white/[0.1] text-zinc-400 group-hover:text-cyan-300 group-hover:border-cyan-400/30'
+                                                        }`}>
+                                                            ▸
+                                                        </span>
                                                     </div>
-                                                )}
+                                                </button>
+                                                <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                                    <span className="text-[9px] font-mono text-zinc-400">
+                                                        ID: {user.id || user.username}
+                                                    </span>
+                                                    <span className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                                                        user.email
+                                                            ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/25'
+                                                            : 'bg-indigo-500/10 text-indigo-300 border-indigo-500/25'
+                                                    }`}>
+                                                        {user.email ? 'Google' : 'Manual'}
+                                                    </span>
+                                                </div>
                                             </div>
 
                                             {/* BADGE STATUS & MASA PAKAI USER */}
-                                            <div className="flex flex-col items-end gap-1.5">
+                                            <div className="flex flex-col items-end gap-1.5 shrink-0">
                                                 {isPending && (
                                                     <div className="px-2.5 py-1 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[8.5px] font-mono font-bold tracking-wider flex items-center gap-1.5">
                                                         <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
@@ -1566,6 +1756,12 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
                                                     </>
                                                 )}
 
+                                                {!user.email && user.hasPassword === false && (
+                                                    <span className="text-[7.5px] font-mono font-bold px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                                        Auto-Aktivasi Password Siap
+                                                    </span>
+                                                )}
+
                                                 {isRejected && (
                                                     <div className="px-2.5 py-1 rounded-md bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[8.5px] font-mono font-bold tracking-wider flex items-center gap-1.5">
                                                         <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
@@ -1575,46 +1771,276 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
                                             </div>
                                         </div>
 
-                                        {/* DETAIL EXPANDABLE (Password & Tanggal Dibuat) */}
-                                        {expandedUserId === user.id && (
-                                            <div className="p-3 bg-[#111] border border-zinc-800 rounded-xl space-y-2 text-[10px]">
-                                                <div className="flex justify-between">
-                                                    <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest">Password:</span>
-                                                    <span className="font-mono text-zinc-300">{user.password || 'Google Auth (No Password)'}</span>
-                                                </div>
-                                                <div className="flex justify-between">
-                                                    <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest">Dibuat:</span>
-                                                    <span className="font-mono text-zinc-300">
-                                                        {user.createdAt ? new Date(user.createdAt).toLocaleString('id-ID') : 'Tidak diketahui'}
-                                                    </span>
-                                                </div>
-                                                {user.membershipExpiresAt && (
-                                                    <div className="flex justify-between">
-                                                        <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest">Expired:</span>
-                                                        <span className="font-mono text-amber-300">
-                                                            {new Date(user.membershipExpiresAt).toLocaleString('id-ID')}
-                                                        </span>
+                                        {/* DETAIL EXPANDABLE (Username, Password/Gmail, Jenis Account, Keamanan, Dibuat, Expired + Salin Semua 1-Klik) */}
+                                        {expandedUserId === userKey && (() => {
+                                            const isGoogleAccount = Boolean(user.email);
+                                            const isPwHidden = Boolean(hiddenPwMap[userKey]);
+                                            const usernameText = String(user.username || '-');
+                                            const jenisAccountText = isGoogleAccount ? 'Login Google' : 'Manual Login';
+                                            const keamananText = isGoogleAccount
+                                                ? 'Google OAuth Verified'
+                                                : user.hasPassword === false
+                                                    ? 'Auto-Aktivasi Login'
+                                                    : 'Bcrypt + Vault AES';
+                                            const dibuatText = user.createdAt
+                                                ? new Date(user.createdAt).toLocaleString('id-ID')
+                                                : 'Tidak diketahui';
+                                            const expiredText = user.membershipTier === 'LIFETIME'
+                                                ? 'Lifetime (Tanpa Batas)'
+                                                : user.membershipExpiresAt
+                                                    ? new Date(user.membershipExpiresAt).toLocaleString('id-ID')
+                                                    : 'Belum Aktif / Non-Member';
+                                            const passwordCopyText = isGoogleAccount
+                                                ? (user.email ? `Login Google (${user.email})` : 'Login Google')
+                                                : user.manualPassword
+                                                    ? String(user.manualPassword)
+                                                    : user.hasPassword === false
+                                                        ? 'Belum disetel (Auto-Aktivasi)'
+                                                        : 'Belum tersedia (perlu login ulang / reset)';
+
+                                            const fullCopySummary = [
+                                                `USERNAME : ${usernameText}`,
+                                                `PASSWORD : ${passwordCopyText}`,
+                                                `JENIS ACCOUNT : ${jenisAccountText}`,
+                                                `KEAMANAN : ${keamananText}`,
+                                                `DIBUAT : ${dibuatText}`,
+                                                `EXPIRED : ${expiredText}`
+                                            ].join('\n');
+
+                                            const allCopyId = `all_${userKey}`;
+                                            const isAllCopied = copiedCredKey === allCopyId;
+
+                                            const copyBtnClass = (active: boolean) =>
+                                                `px-2 py-0.5 rounded-md text-[8px] font-mono font-bold border transition-all cursor-pointer shrink-0 ${
+                                                    active
+                                                        ? 'bg-emerald-500/25 border-emerald-400/50 text-emerald-200'
+                                                        : 'bg-white/[0.05] hover:bg-cyan-500/20 border-white/[0.1] hover:border-cyan-400/40 text-zinc-300 hover:text-cyan-200'
+                                                }`;
+
+                                            return (
+                                                <div className="p-3.5 bg-gradient-to-b from-[#11131b] to-[#0b0c12] border border-white/[0.09] rounded-xl space-y-3 text-[10px] shadow-inner">
+                                                    {/* Header Bar + Tombol Salin Semua 1-Klik */}
+                                                    <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-white/[0.06]">
+                                                        <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-zinc-300">
+                                                            <svg className="w-3.5 h-3.5 text-cyan-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                                                <path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                                                            </svg>
+                                                            <span>Detail Akun User</span>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleCopyCredential(allCopyId, fullCopySummary)}
+                                                            className={`px-2.5 py-1 rounded-lg text-[8.5px] font-mono font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                                                                isAllCopied
+                                                                    ? 'bg-emerald-500/25 border-emerald-400/60 text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.25)]'
+                                                                    : 'bg-cyan-500/15 hover:bg-cyan-500/25 border-cyan-400/40 text-cyan-200'
+                                                            }`}
+                                                        >
+                                                            <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                                                <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                                            </svg>
+                                                            <span>{isAllCopied ? '✓ Semua Tersalin' : 'Salin Semua'}</span>
+                                                        </button>
                                                     </div>
-                                                )}
-                                            </div>
-                                        )}
+
+                                                    {/* Daftar Detail 6 Baris Terstruktur (Masing-masing bisa disalin) */}
+                                                    <div className="rounded-xl bg-black/45 border border-white/[0.08] divide-y divide-white/[0.06] overflow-hidden">
+                                                        {/* 1. USERNAME */}
+                                                        <div className="px-3 py-2 flex items-center justify-between gap-2">
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="text-[8px] font-bold uppercase tracking-widest text-zinc-500">USERNAME</div>
+                                                                <div className="font-mono text-[10.5px] font-bold text-white break-all select-all mt-0.5">
+                                                                    {usernameText}
+                                                                </div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleCopyCredential(`uname_${userKey}`, usernameText)}
+                                                                className={copyBtnClass(copiedCredKey === `uname_${userKey}`)}
+                                                            >
+                                                                {copiedCredKey === `uname_${userKey}` ? '✓ Tersalin' : 'Salin'}
+                                                            </button>
+                                                        </div>
+
+                                                        {/* 2. PASSWORD / GMAIL */}
+                                                        <div className={`px-3 py-2.5 flex items-center justify-between gap-2 ${isGoogleAccount ? 'bg-emerald-950/15' : 'bg-indigo-950/15'}`}>
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className={`text-[8px] font-bold uppercase tracking-widest ${isGoogleAccount ? 'text-emerald-400' : 'text-indigo-300'}`}>
+                                                                    {isGoogleAccount ? 'PASSWORD / GMAIL' : 'PASSWORD'}
+                                                                </div>
+                                                                {isGoogleAccount ? (
+                                                                    <div className="font-mono text-[10.5px] font-bold text-emerald-200 break-all select-all mt-0.5">
+                                                                        {user.email}
+                                                                    </div>
+                                                                ) : user.manualPassword ? (
+                                                                    <div className="font-mono text-[10.5px] font-bold text-cyan-200 tracking-wide break-all select-all mt-0.5">
+                                                                        {isPwHidden ? '•'.repeat(Math.min(12, Math.max(8, String(user.manualPassword).length))) : user.manualPassword}
+                                                                    </div>
+                                                                ) : (
+                                                                    <div className="font-mono text-[9px] text-amber-300/90 leading-snug mt-0.5">
+                                                                        {user.hasPassword === false
+                                                                            ? 'Belum disetel (Auto-Aktivasi siap saat login)'
+                                                                            : 'Belum tersedia di vault — muncul saat login ulang / reset password'}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            <div className="flex items-center gap-1 shrink-0">
+                                                                {!isGoogleAccount && user.manualPassword && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setHiddenPwMap(prev => ({ ...prev, [userKey]: !prev[userKey] }))}
+                                                                        className="px-2 py-0.5 rounded-md text-[8px] font-mono font-bold bg-white/[0.05] hover:bg-white/10 border border-white/[0.1] text-zinc-300 transition-all cursor-pointer"
+                                                                    >
+                                                                        {isPwHidden ? 'Lihat' : 'Tutup'}
+                                                                    </button>
+                                                                )}
+                                                                {(isGoogleAccount ? Boolean(user.email) : Boolean(user.manualPassword)) && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleCopyCredential(`pw_${userKey}`, isGoogleAccount ? String(user.email || '') : String(user.manualPassword || ''))}
+                                                                        className={copyBtnClass(copiedCredKey === `pw_${userKey}`)}
+                                                                    >
+                                                                        {copiedCredKey === `pw_${userKey}` ? '✓ Tersalin' : 'Salin'}
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </div>
+
+                                                        {/* 3. JENIS ACCOUNT */}
+                                                        <div className="px-3 py-2 flex items-center justify-between gap-2">
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="text-[8px] font-bold uppercase tracking-widest text-zinc-500">JENIS ACCOUNT</div>
+                                                                <div className="mt-0.5 flex items-center gap-1.5">
+                                                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[9px] font-mono font-bold border ${
+                                                                        isGoogleAccount
+                                                                            ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-300'
+                                                                            : 'bg-indigo-500/15 border-indigo-500/35 text-indigo-300'
+                                                                    }`}>
+                                                                        {jenisAccountText}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleCopyCredential(`jenis_${userKey}`, jenisAccountText)}
+                                                                className={copyBtnClass(copiedCredKey === `jenis_${userKey}`)}
+                                                            >
+                                                                {copiedCredKey === `jenis_${userKey}` ? '✓ Tersalin' : 'Salin'}
+                                                            </button>
+                                                        </div>
+
+                                                        {/* 4. KEAMANAN */}
+                                                        <div className="px-3 py-2 flex items-center justify-between gap-2">
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="text-[8px] font-bold uppercase tracking-widest text-zinc-500">KEAMANAN</div>
+                                                                <div className={`font-mono text-[10px] font-semibold mt-0.5 ${isGoogleAccount ? 'text-emerald-300' : user.hasPassword === false ? 'text-amber-300' : 'text-zinc-200'}`}>
+                                                                    {keamananText}
+                                                                </div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleCopyCredential(`sec_${userKey}`, keamananText)}
+                                                                className={copyBtnClass(copiedCredKey === `sec_${userKey}`)}
+                                                            >
+                                                                {copiedCredKey === `sec_${userKey}` ? '✓ Tersalin' : 'Salin'}
+                                                            </button>
+                                                        </div>
+
+                                                        {/* 5. DIBUAT */}
+                                                        <div className="px-3 py-2 flex items-center justify-between gap-2">
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="text-[8px] font-bold uppercase tracking-widest text-zinc-500">DIBUAT</div>
+                                                                <div className="font-mono text-[10px] font-semibold text-zinc-200 mt-0.5">
+                                                                    {dibuatText}
+                                                                </div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleCopyCredential(`created_${userKey}`, dibuatText)}
+                                                                className={copyBtnClass(copiedCredKey === `created_${userKey}`)}
+                                                            >
+                                                                {copiedCredKey === `created_${userKey}` ? '✓ Tersalin' : 'Salin'}
+                                                            </button>
+                                                        </div>
+
+                                                        {/* 6. EXPIRED */}
+                                                        <div className="px-3 py-2 flex items-center justify-between gap-2">
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="text-[8px] font-bold uppercase tracking-widest text-zinc-500">EXPIRED</div>
+                                                                <div className={`font-mono text-[10px] font-bold mt-0.5 ${user.membershipExpiresAt || user.membershipTier === 'LIFETIME' ? 'text-amber-300' : 'text-zinc-400'}`}>
+                                                                    {expiredText}
+                                                                </div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleCopyCredential(`exp_${userKey}`, expiredText)}
+                                                                className={copyBtnClass(copiedCredKey === `exp_${userKey}`)}
+                                                            >
+                                                                {copiedCredKey === `exp_${userKey}` ? '✓ Tersalin' : 'Salin'}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+
+                                                    {!isGoogleAccount && (
+                                                        <div className="pt-1">
+                                                            {resetPwUserId === userKey ? (
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <input
+                                                                        type="text"
+                                                                        value={resetPwValue}
+                                                                        onChange={(e) => setResetPwValue(e.target.value)}
+                                                                        onKeyDown={(e) => { if (e.key === 'Enter') handleResetUserPassword(userKey); }}
+                                                                        placeholder="Password baru (min 6 char)"
+                                                                        className="flex-1 px-2.5 py-1.5 bg-black border border-zinc-700 rounded-lg text-[10px] text-white font-mono focus:border-cyan-500 focus:outline-none"
+                                                                    />
+                                                                    <button
+                                                                        onClick={() => handleResetUserPassword(userKey)}
+                                                                        disabled={isResettingPw}
+                                                                        className="px-2.5 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[9px] font-bold uppercase cursor-pointer"
+                                                                    >
+                                                                        {isResettingPw ? '...' : 'Simpan'}
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => { setResetPwUserId(null); setResetPwValue(''); }}
+                                                                        className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-[9px] font-bold cursor-pointer"
+                                                                    >
+                                                                        Batal
+                                                                    </button>
+                                                                </div>
+                                                            ) : (
+                                                                <button
+                                                                    onClick={() => { setResetPwUserId(userKey); setResetPwValue(''); }}
+                                                                    className="w-full py-1.5 bg-zinc-900/90 hover:bg-zinc-800 border border-white/10 text-zinc-200 rounded-lg text-[9px] font-bold uppercase tracking-wider cursor-pointer transition-colors"
+                                                                >
+                                                                    {user.hasPassword === false ? 'Setel Password Baru Sekarang' : 'Reset Password User'}
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
 
                                         {/* AKSI TOMBOL: BERLAKU SESUAI STATUS USER (APPROVAL vs MEMBERSHIP vs REJECTED) */}
                                         {isPending && (
                                             <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
                                                 <button 
-                                                    onClick={() => handleAcceptUser(user.id)} 
+                                                    onClick={() => handleAcceptUser(userKey)} 
                                                     className="py-2 bg-green-900/20 border border-green-500/30 text-green-400 text-[8.5px] font-bold rounded-lg hover:bg-green-600 hover:text-white transition-all uppercase tracking-widest flex items-center justify-center gap-1 cursor-pointer"
                                                 >
                                                     <span>✓</span>
                                                     <span>Terima / Approve</span>
                                                 </button>
                                                 <button 
-                                                    onClick={() => handleRejectUser(user.id)} 
-                                                    className="py-2 bg-red-900/20 border border-red-500/30 text-red-400 text-[8.5px] font-bold rounded-lg hover:bg-red-600 hover:text-white transition-all uppercase tracking-widest flex items-center justify-center gap-1 cursor-pointer"
+                                                    onClick={() => handleRejectUser(userKey)} 
+                                                    className={`py-2 border text-[8.5px] font-bold rounded-lg transition-all uppercase tracking-widest flex items-center justify-center gap-1 cursor-pointer ${
+                                                        confirmRejectUserId === userKey
+                                                            ? 'bg-red-600 border-red-400 text-white'
+                                                            : 'bg-red-900/20 border-red-500/30 text-red-400 hover:bg-red-600 hover:text-white'
+                                                    }`}
                                                 >
                                                     <span>✕</span>
-                                                    <span>Tolak</span>
+                                                    <span>{confirmRejectUserId === userKey ? 'Klik Lagi utk Tolak' : 'Tolak'}</span>
                                                 </button>
                                             </div>
                                         )}
@@ -1625,13 +2051,22 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
                                                     Tambahkan Durasi Membership:
                                                 </div>
                                                 <div className="grid grid-cols-4 gap-1.5">
-                                                    <button onClick={() => handleAddMembership(user.id || user.username, 7)} className="py-1.5 bg-blue-900/20 border border-blue-500/30 text-blue-400 text-[8px] font-bold rounded-lg hover:bg-blue-500 hover:text-white transition-all cursor-pointer">+1 Minggu</button>
-                                                    <button onClick={() => handleAddMembership(user.id || user.username, 14)} className="py-1.5 bg-purple-900/20 border border-purple-500/30 text-purple-400 text-[8px] font-bold rounded-lg hover:bg-purple-500 hover:text-white transition-all cursor-pointer">+2 Minggu</button>
-                                                    <button onClick={() => handleAddMembership(user.id || user.username, 30)} className="py-1.5 bg-amber-900/20 border border-amber-500/30 text-amber-400 text-[8px] font-bold rounded-lg hover:bg-amber-500 hover:text-white transition-all cursor-pointer">+1 Bulan</button>
-                                                    <button onClick={() => handleAddMembership(user.id || user.username, 18250)} className="py-1.5 bg-green-900/20 border border-green-500/30 text-green-400 text-[8px] font-bold rounded-lg hover:bg-green-500 hover:text-white transition-all cursor-pointer">+50 Tahun</button>
+                                                    <button onClick={() => handleAddMembership(userKey, 7)} className="py-1.5 bg-blue-900/20 border border-blue-500/30 text-blue-400 text-[8px] font-bold rounded-lg hover:bg-blue-500 hover:text-white transition-all cursor-pointer">+1 Minggu</button>
+                                                    <button onClick={() => handleAddMembership(userKey, 14)} className="py-1.5 bg-purple-900/20 border border-purple-500/30 text-purple-400 text-[8px] font-bold rounded-lg hover:bg-purple-500 hover:text-white transition-all cursor-pointer">+2 Minggu</button>
+                                                    <button onClick={() => handleAddMembership(userKey, 30)} className="py-1.5 bg-amber-900/20 border border-amber-500/30 text-amber-400 text-[8px] font-bold rounded-lg hover:bg-amber-500 hover:text-white transition-all cursor-pointer">+1 Bulan</button>
+                                                    <button onClick={() => handleAddMembership(userKey, 18250)} className="py-1.5 bg-green-900/20 border border-green-500/30 text-green-400 text-[8px] font-bold rounded-lg hover:bg-green-500 hover:text-white transition-all cursor-pointer">+50 Tahun</button>
                                                 </div>
                                                 <div className="mt-2">
-                                                    <button onClick={() => handleRejectUser(user.id)} className="w-full py-1.5 bg-red-900/20 border border-red-500/30 text-red-400 text-[8px] font-bold rounded-lg hover:bg-red-600 hover:text-white transition-all uppercase tracking-widest cursor-pointer">Hapus Akses (Banned)</button>
+                                                    <button
+                                                        onClick={() => handleRejectUser(userKey)}
+                                                        className={`w-full py-1.5 border text-[8px] font-bold rounded-lg transition-all uppercase tracking-widest cursor-pointer ${
+                                                            confirmRejectUserId === userKey
+                                                                ? 'bg-red-600 border-red-400 text-white'
+                                                                : 'bg-red-900/20 border-red-500/30 text-red-400 hover:bg-red-600 hover:text-white'
+                                                        }`}
+                                                    >
+                                                        {confirmRejectUserId === userKey ? 'Klik Sekali Lagi untuk Konfirmasi Banned' : 'Hapus Akses (Banned)'}
+                                                    </button>
                                                 </div>
                                             </div>
                                         )}
@@ -1639,7 +2074,7 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
                                         {isRejected && (
                                             <div className="pt-2 border-t border-white/5">
                                                 <button 
-                                                    onClick={() => handleAcceptUser(user.id)} 
+                                                    onClick={() => handleAcceptUser(userKey)} 
                                                     className="w-full py-2 bg-emerald-900/20 border border-emerald-500/30 text-emerald-400 text-[8.5px] font-bold rounded-lg hover:bg-emerald-600 hover:text-white transition-all uppercase tracking-widest flex items-center justify-center gap-1 cursor-pointer"
                                                 >
                                                     <span>↺</span>
@@ -1969,202 +2404,12 @@ const FloatingUI: React.FC<FloatingUIProps> = ({
           </div>
       )}
 
-      {/* 4 GLOBAL TRADING SESSIONS SCHEDULE MODAL */}
+      {/* 4 GLOBAL TRADING SESSIONS FULL PAGE VIEW */}
       {showSessionSchedule && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="relative w-full max-w-lg bg-[#0c0d12]/98 border border-white/[0.1] rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.85)] overflow-hidden flex flex-col max-h-[90vh]">
-            {/* Modal Header */}
-            <div className="p-4 sm:p-5 border-b border-white/[0.08] flex items-center justify-between bg-white/[0.02]">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-white/[0.04] border border-white/10 flex items-center justify-center text-zinc-300">
-                  <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 16 14" />
-                  </svg>
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold text-white tracking-tight">
-                      Jadwal 4 Sesi Trading Global
-                    </h3>
-                    <span className="text-[9px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 tracking-wider">
-                      REAL-TIME WIB
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-zinc-400 mt-0.5">
-                    Rotasi likuiditas institusional pasar finansial dunia (Waktu Indonesia Barat)
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowSessionSchedule(false)}
-                className="w-8 h-8 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 hover:text-white flex items-center justify-center transition-all cursor-pointer border border-white/5"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            {/* Current WIB Clock Banner */}
-            {(() => {
-              const sessionDate = new Date(clockTime);
-              const timePartsWIB = new Intl.DateTimeFormat('id-ID', {
-                timeZone: 'Asia/Jakarta',
-                hour: 'numeric',
-                minute: 'numeric',
-                second: 'numeric',
-                hour12: false
-              }).formatToParts(sessionDate);
-              const sHour = parseInt(timePartsWIB.find(p => p.type === 'hour')?.value || '0', 10);
-              const sMinute = parseInt(timePartsWIB.find(p => p.type === 'minute')?.value || '0', 10);
-              const sSecond = parseInt(timePartsWIB.find(p => p.type === 'second')?.value || '0', 10);
-              const sTotalMin = sHour * 60 + sMinute;
-              const timeStrWIB = `${String(sHour).padStart(2, '0')}:${String(sMinute).padStart(2, '0')}:${String(sSecond).padStart(2, '0')}`;
-
-              const sessions = [
-                {
-                  id: 'asia',
-                  code: 'ASIA',
-                  name: 'Sesi Asia Pasifik',
-                  city: 'Sydney & Pasifik',
-                  hours: '05:00 — 07:00 WIB',
-                  note: 'Likuiditas awal pembukaan market Pasifik & pembentukan baseline Asian Range.',
-                  isActive: sTotalMin >= 5 * 60 && sTotalMin < 7 * 60,
-                  activeBorder: 'border-emerald-500/40 shadow-[0_0_24px_rgba(16,185,129,0.15)] ring-1 ring-emerald-500/25',
-                  activeBg: 'bg-gradient-to-r from-emerald-500/10 via-zinc-900/90 to-zinc-900',
-                  tagColor: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
-                },
-                {
-                  id: 'tokyo',
-                  code: 'TYO',
-                  name: 'Sesi Tokyo',
-                  city: 'Tokyo, Asia Timur',
-                  hours: '07:00 — 16:00 WIB',
-                  note: 'Pergerakan dominan pair JPY & AUD. Menjelang 14:00 mulai persiapan crossover ke sesi Eropa.',
-                  isActive: sTotalMin >= 7 * 60 && sTotalMin < 16 * 60,
-                  activeBorder: 'border-rose-500/40 shadow-[0_0_24px_rgba(244,63,94,0.15)] ring-1 ring-rose-500/25',
-                  activeBg: 'bg-gradient-to-r from-rose-500/10 via-zinc-900/90 to-zinc-900',
-                  tagColor: 'text-rose-400 border-rose-500/30 bg-rose-500/10'
-                },
-                {
-                  id: 'london',
-                  code: 'LDN',
-                  name: 'Sesi London',
-                  city: 'London European Hub',
-                  hours: '14:00 — 23:00 WIB',
-                  note: 'Pusat volume transaksi forex terbesar global (~43%). Sering terjadi pembentukan Judas Swing & tren ekspansi harian.',
-                  isActive: sTotalMin >= 14 * 60 && sTotalMin < 23 * 60,
-                  activeBorder: 'border-violet-500/40 shadow-[0_0_24px_rgba(139,92,246,0.15)] ring-1 ring-violet-500/25',
-                  activeBg: 'bg-gradient-to-r from-violet-500/10 via-zinc-900/90 to-zinc-900',
-                  tagColor: 'text-violet-400 border-violet-500/30 bg-violet-500/10'
-                },
-                {
-                  id: 'newyork',
-                  code: 'NYC',
-                  name: 'Sesi New York',
-                  city: 'New York Wall Street',
-                  hours: '20:00 — 05:00 WIB',
-                  note: 'Pusat likuiditas USD & Gold (XAUUSD). Periode rilis berita High Impact tier-1 (NFP, CPI, FOMC, Fed Rate).',
-                  isActive: sTotalMin >= 20 * 60 || sTotalMin < 5 * 60,
-                  activeBorder: 'border-sky-500/40 shadow-[0_0_24px_rgba(14,165,233,0.15)] ring-1 ring-sky-500/25',
-                  activeBg: 'bg-gradient-to-r from-sky-500/10 via-zinc-900/90 to-zinc-900',
-                  tagColor: 'text-sky-400 border-sky-500/30 bg-sky-500/10'
-                }
-              ];
-
-              return (
-                <div className="p-4 sm:p-5 overflow-y-auto space-y-3">
-                  <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-900/80 border border-white/10">
-                    <div className="flex items-center gap-2">
-                      <span className="relative flex h-2 w-2">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
-                      </span>
-                      <span className="text-[10px] font-mono text-zinc-300 font-semibold tracking-wider uppercase">
-                        JAM SERVER SAAT INI (WIB):
-                      </span>
-                    </div>
-                    <span className="text-base font-mono font-bold text-emerald-400 tracking-wider tabular-nums">
-                      {timeStrWIB} <span className="text-[10px] text-zinc-400 font-normal">WIB</span>
-                    </span>
-                  </div>
-
-                  <div className="grid gap-2.5">
-                    {sessions.map((item) => (
-                      <div
-                        key={item.id}
-                        className={`relative p-3.5 rounded-xl border transition-all ${
-                          item.isActive
-                            ? `${item.activeBorder} ${item.activeBg}`
-                            : 'bg-zinc-900/40 border-white/[0.06] hover:border-white/15'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-center gap-3">
-                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-mono font-bold text-[11px] border shrink-0 ${item.tagColor}`}>
-                              {item.code}
-                            </div>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <h4 className="text-xs font-bold text-white tracking-tight">
-                                  {item.name}
-                                </h4>
-                                <span className="text-[10px] text-zinc-400">
-                                  · {item.city}
-                                </span>
-                              </div>
-                              <div className="text-[11px] font-mono font-bold text-zinc-200 mt-0.5 tabular-nums">
-                                {item.hours}
-                              </div>
-                            </div>
-                          </div>
-
-                          {item.isActive ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px] font-mono font-bold tracking-wider">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                              AKTIF SEKARANG
-                            </span>
-                          ) : (
-                            <span className="text-[8.5px] font-mono text-zinc-500 px-2 py-0.5 rounded bg-zinc-800/50 border border-white/5">
-                              MENUNGGU
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="mt-2 text-[10.5px] text-zinc-400 pl-11 leading-relaxed font-sans">
-                          {item.note}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="mt-3 p-3.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-[10.5px] text-zinc-300 leading-relaxed font-sans">
-                    <div className="flex items-center gap-2 mb-1 text-amber-300 font-semibold text-[11px]">
-                      <svg className="w-3.5 h-3.5 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                      </svg>
-                      <span>Golden Liquidity Overlap (20:00 — 23:00 WIB)</span>
-                    </div>
-                    <p className="text-zinc-400 pl-5">
-                      Volatilitas dan pergerakan spread tertipis terjadi saat <span className="text-white font-medium">Overlap London & New York (20:00 — 23:00 WIB)</span>. Sangat ideal untuk eksekusi institusi Smart Money Concept (SMC), Liquidity Sweep, dan Scalping M1–M5 pada Gold (XAUUSD) serta Major Forex.
-                    </p>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Footer */}
-            <div className="p-3 border-t border-white/[0.08] bg-black/40 flex justify-end">
-              <button
-                onClick={() => setShowSessionSchedule(false)}
-                className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-mono text-[10px] font-bold tracking-wider transition-colors cursor-pointer"
-              >
-                TUTUP
-              </button>
-            </div>
-          </div>
-        </div>
+        <SessionSchedulePage
+          clockTime={clockTime}
+          onBack={() => setShowSessionSchedule(false)}
+        />
       )}
     </div>
   );

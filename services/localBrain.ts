@@ -3,6 +3,9 @@ import { Asset, Candle, AnalysisResult, TradeFeedback, TimeFrame } from "../type
 import { calculateATR, detectCandlestickPatterns, detectSMC, SMCResult } from "../utils/indicators";
 import { SecurityManager } from "../utils/SecurityManager";
 import { isBlacklisted, getPatternWeight, getTPExtension, getDiagnosticReason } from '../core/feedbackEngine';
+import { getAssetPrecision } from '../utils/priceFormatters';
+import { getPairBehavior } from '../core/pairProfiles';
+import { enforceTimeframeTradingPlan, getTimeframePlanSpec } from '../core/timeframePlan';
 
 const rv = () => {
     const v = ["Validasi institusional aktif.", "Dikonfirmasi oleh volume algoritma.", "Probabilitas tinggi berdasarkan data historis.", "Jejak Smart Money terdeteksi.", "Sesuai dengan protokol Zero Floating."];
@@ -58,40 +61,30 @@ export const analyzeLocalMarket = (
   if (SecurityManager.isSystemLocked()) {
       return { signal: 'BUY', confidence: 0, entryPrice: 0, stopLoss: 0, takeProfit: 0, riskRewardRatio: "0:0", reasoning: ["SYSTEM LOCKED"], smcConceptsFound: ["CORRUPTED"], timestamp: new Date().toLocaleTimeString(), timeframe: timeframe, learningKey: "", prediction: "" };
   }
-  if (!candles || candles.length < 250) {
+  if (!candles || candles.length < 30) {
       return { signal: 'BUY', confidence: 0, entryPrice: 0, stopLoss: 0, takeProfit: 0, riskRewardRatio: "0:0", reasoning: Array(10).fill("Initializing ASI Core..."), smcConceptsFound: [], timestamp: new Date().toLocaleTimeString(), timeframe: timeframe, learningKey: "", prediction: "" };
   }
 
+  const decimals = getAssetPrecision(asset);
+  const minStep = Math.pow(10, -decimals);
   const current = candles[candles.length - 1];
   const prev = candles[candles.length - 2];
-  const atr = calculateATR(candles, 14) || (current.close * 0.001);
+  const atr = calculateATR(candles, 14) || Math.max(current.close * 0.001, minStep * 20);
   const patterns = detectCandlestickPatterns(candles);
   const smc = detectSMC(candles, timeframe);
 
+  const planSpec = getTimeframePlanSpec(asset, timeframe);
   let isCounterTrend = false;
   let setupType = "SMC_TREND";
-  let modeName = "TRADING";
+  const modeName = planSpec.modeName;
+  const slBuffer = planSpec.atrMultiplier;
+  const planRR = planSpec.planRR;
+  const targetRRLabel = planSpec.rrLabel;
+  const tp1R = planSpec.tp1R, tp2R = planSpec.tp2R, tp3R = planSpec.tp3R;
   let minScore = 75;
-  let slBuffer = 1.5;
-  let planRR = 2.0;
-  let targetRRLabel = "1:2";
-  let tp1R = 1.0, tp2R = 1.5, tp3R = 2.0;
-
-  if (timeframe === 'M1' || timeframe === 'M5') {
-      modeName = "SCALPING"; minScore = 75; slBuffer = 1.0; planRR = 2.0; targetRRLabel = "1:2"; tp1R = 1.0; tp2R = 1.5; tp3R = 2.0;
-  }
-  else if (timeframe === 'M15') {
-      modeName = "INTRADAY"; minScore = 80; slBuffer = 1.2; planRR = 3.0; targetRRLabel = "1:3"; tp1R = 1.5; tp2R = 2.0; tp3R = 3.0;
-  }
-  else if (timeframe === 'M30') {
-      modeName = "DAY TRADE"; minScore = 85; slBuffer = 1.5; planRR = 4.0; targetRRLabel = "1:4"; tp1R = 2.0; tp2R = 3.0; tp3R = 4.0;
-  }
-  else if (timeframe === 'H1') {
-      modeName = "SWING MINGGUAN"; minScore = 90; slBuffer = 2.0; planRR = 5.0; targetRRLabel = "1:5"; tp1R = 2.0; tp2R = 3.5; tp3R = 5.0;
-  }
-  else if (timeframe === 'H4' || timeframe === 'D1' || timeframe === 'W1') {
-      modeName = "SWING BULANAN"; minScore = 90; slBuffer = 2.5; planRR = 6.0; targetRRLabel = "1:6"; tp1R = 2.5; tp2R = 4.0; tp3R = 6.0;
-  }
+  if (timeframe === 'M15') minScore = 80;
+  else if (timeframe === 'M30') minScore = 85;
+  else if (timeframe === 'H1' || timeframe === 'H4' || timeframe === 'D1') minScore = 90;
 
   const bullishPatterns = patterns.filter(p => p.type === 'BULLISH');
   const bearishPatterns = patterns.filter(p => p.type === 'BEARISH');
@@ -146,83 +139,74 @@ export const analyzeLocalMarket = (
       confidence = Math.max(50, confidence - 25);
   }
 
-  let entry = current.close;
-  
-  // 1. LIMIT SNIPER ENTRY LOGIC
-  // Never enter exactly at current close if it's an impulse. Always find the Discount/Premium array.
+  let candidateEntry = current.close;
+
+  // 1. LIMIT SNIPER ENTRY LOGIC (constrained later to timeframe plan pullback envelope)
   const recentWindow = candles.slice(Math.max(0, candles.length - 40));
   const recentSwingLow = Math.min(...recentWindow.map(c => c.low));
   const recentSwingHigh = Math.max(...recentWindow.map(c => c.high));
-  
-  // Fib OTE 61.8% to 78.6% is the golden zone
+
   const range = recentSwingHigh - recentSwingLow;
-  const fib618Bullish = recentSwingLow + (range * 0.382); // Retracement down
-  const fib618Bearish = recentSwingHigh - (range * 0.382); // Retracement up
+  const fib618Bullish = recentSwingLow + (range * 0.382);
+  const fib618Bearish = recentSwingHigh - (range * 0.382);
 
   if (signal === 'BUY') {
-      entry = fib618Bullish; // Default to OTE Limit
-      if (smc.fibonacciOTE && smc.fibonacciOTE.level0_618 < current.close) entry = smc.fibonacciOTE.level0_618;
-      else if (smc.orderBlock === 'BULLISH') entry = Math.min(entry, prev.high); // Order Block Top
-      else if (smc.fvg === 'BULLISH') entry = Math.min(entry, candles[candles.length - 3].high); // FVG Top
-      
-      // Ensure we don't place limit above current price (that would trigger as market execution)
-      if (entry > current.close) entry = current.close * 0.9995; // Force a slight pullback
+      candidateEntry = fib618Bullish;
+      if (smc.fibonacciOTE && smc.fibonacciOTE.level0_618 < current.close) candidateEntry = smc.fibonacciOTE.level0_618;
+      else if (smc.orderBlock === 'BULLISH') candidateEntry = Math.min(candidateEntry, prev.high);
+      else if (smc.fvg === 'BULLISH') candidateEntry = Math.min(candidateEntry, candles[candles.length - 3].high);
+      if (candidateEntry > current.close) candidateEntry = current.close * 0.9995;
   } else {
-      entry = fib618Bearish;
-      if (smc.fibonacciOTE && smc.fibonacciOTE.level0_618 > current.close) entry = smc.fibonacciOTE.level0_618;
-      else if (smc.orderBlock === 'BEARISH') entry = Math.max(entry, prev.low);
-      else if (smc.fvg === 'BEARISH') entry = Math.max(entry, candles[candles.length - 3].low);
-      
-      if (entry < current.close) entry = current.close * 1.0005; // Force a slight pullback
+      candidateEntry = fib618Bearish;
+      if (smc.fibonacciOTE && smc.fibonacciOTE.level0_618 > current.close) candidateEntry = smc.fibonacciOTE.level0_618;
+      else if (smc.orderBlock === 'BEARISH') candidateEntry = Math.max(candidateEntry, prev.low);
+      else if (smc.fvg === 'BEARISH') candidateEntry = Math.max(candidateEntry, candles[candles.length - 3].low);
+      if (candidateEntry < current.close) candidateEntry = current.close * 1.0005;
   }
 
-  let sl = 0, tp = 0;
-  let rrLabel = targetRRLabel;
-
+  let candidateSl = 0;
   if (signal === 'BUY') {
-      // 2. STRUCTURAL STOP LOSS
-      // Place SL behind the most recent swing low, not just the last 3 candles
       const swingLows = [];
-      for (let i = candles.length - 20; i < candles.length - 1; i++) {
-         if (i < 2) continue;
+      for (let i = Math.max(2, candles.length - 20); i < candles.length - 1; i++) {
          if (candles[i].low < candles[i-1].low && candles[i].low < candles[i+1].low) {
              swingLows.push(candles[i].low);
          }
       }
       const structuralLow = swingLows.length > 0 ? swingLows[swingLows.length - 1] : recentSwingLow;
-      
-      const riskBuffer = atr * slBuffer; 
-      sl = structuralLow - riskBuffer;
-      
-      const risk = Math.max(atr * 0.5, entry - sl);
-      sl = Number((entry - risk).toFixed(entry > 100 ? 2 : 4));
-      
-      // Strict Plan RR target for Take Profit
-      tp = Number((entry + (risk * planRR)).toFixed(entry > 100 ? 2 : 4));
-      rrLabel = targetRRLabel;
+      candidateSl = structuralLow - (atr * slBuffer);
   } else {
-      // 2. STRUCTURAL STOP LOSS
       const swingHighs = [];
-      for (let i = candles.length - 20; i < candles.length - 1; i++) {
-         if (i < 2) continue;
+      for (let i = Math.max(2, candles.length - 20); i < candles.length - 1; i++) {
          if (candles[i].high > candles[i-1].high && candles[i].high > candles[i+1].high) {
              swingHighs.push(candles[i].high);
          }
       }
       const structuralHigh = swingHighs.length > 0 ? swingHighs[swingHighs.length - 1] : recentSwingHigh;
-      
-      const riskBuffer = atr * slBuffer;
-      sl = structuralHigh + riskBuffer;
-      
-      const risk = Math.max(atr * 0.5, sl - entry);
-      sl = Number((entry + risk).toFixed(entry > 100 ? 2 : 4));
-      
-      // Strict Plan RR target for Take Profit
-      tp = Number((entry - (risk * planRR)).toFixed(entry > 100 ? 2 : 4));
-      rrLabel = targetRRLabel;
+      candidateSl = structuralHigh + (atr * slBuffer);
   }
 
-  const prediction = `Mode ${modeName} - Target harga diproyeksikan ke arah likuiditas dengan eksekusi TP pada Plan RR ${rrLabel} (TP1: 1:${tp1R}, TP2: 1:${tp2R}, Target Utama TP3: 1:${tp3R}).`;
+  const candidateRisk = Math.max(atr * 0.5, minStep * 10, Math.abs(candidateEntry - candidateSl));
+  const candidateTp = signal === 'BUY' ? candidateEntry + candidateRisk * planRR : candidateEntry - candidateRisk * planRR;
+
+  const pairProfile = getPairBehavior(asset);
+  const enforcedPlan = enforceTimeframeTradingPlan({
+      asset,
+      timeframe,
+      signal,
+      currentPrice: current.close,
+      atr,
+      spreadAverage: pairProfile.spreadAverage,
+      candidateEntry,
+      candidateSl,
+      candidateTp,
+  });
+
+  const entry = enforcedPlan.entryPrice;
+  const sl = enforcedPlan.stopLoss;
+  const tp = enforcedPlan.takeProfit;
+  const rrLabel = enforcedPlan.riskRewardRatio;
+  const nextPricePrediction = enforcedPlan.tp1Price;
+  const prediction = `Mode ${modeName} (${timeframe}) - SL ${enforcedPlan.usesPips ? `${enforcedPlan.slPips} pips` : planSpec.slLabel}, TP ${enforcedPlan.usesPips ? `${enforcedPlan.tpPips} pips` : planSpec.tpLabel} pada Plan RR ${rrLabel} (TP1: 1:${tp1R}, TP2: 1:${tp2R}, Target Utama TP3: 1:${tp3R}).`;
   const smcConcepts = ["ASI_CORE", setupType, timeframe + "_ANALYSIS"];
   if (smc.bos !== 'NONE') smcConcepts.push(`BOS_${smc.bos}`);
   if (smc.choch !== 'NONE') smcConcepts.push(`CHoCH_${smc.choch}`);
@@ -244,6 +228,7 @@ export const analyzeLocalMarket = (
     timestamp: new Date().toLocaleTimeString(),
     timeframe: timeframe,
     learningKey: setupSignature,
-    prediction: prediction
+    prediction: prediction,
+    nextPricePrediction
   };
 };

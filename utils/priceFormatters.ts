@@ -22,15 +22,25 @@ export const getAssetPrecision = (asset: Asset | string): number => {
  * Returns the multiplier to calculate pip value.
  * - Standard Forex: 10,000 (0.0001 = 1 pip)
  * - JPY Forex: 100 (0.01 = 1 pip)
- * - Gold (XAUUSD): 10 (0.10 = 1 pip, $1 move = 10 pips)
- * - Others: 1
+ * - Gold (XAUUSD) & Platinum (XPTUSD): 10 (0.10 = 1 pip, $1 move = 10 pips)
+ * - Silver (XAGUSD): 100 (0.01 = 1 pip, $0.10 move = 10 pips)
+ * - Others (Crypto, Indices, Oil): 1 (point-based)
  */
 export const getPipScale = (asset: Asset | string): number => {
     const a = (asset || '').toUpperCase();
     if (a.includes('JPY')) return 100;
     if (['EURUSD', 'GBPUSD', 'AUDUSD', 'USDCHF', 'NZDUSD'].some(p => a.includes(p))) return 10000;
-    if (a.includes('XAUUSD') || a.includes('GOLD')) return 10;
+    if (a.includes('XAUUSD') || a.includes('GOLD') || a.includes('XPTUSD') || a.includes('PLATINUM')) return 10;
+    if (a.includes('XAGUSD') || a.includes('SILVER')) return 100;
     return 1;
+};
+
+export const assetUsesPips = (asset: Asset | string): boolean => {
+    const a = (asset || '').toUpperCase();
+    return (
+        a.includes('JPY') ||
+        ['EURUSD', 'GBPUSD', 'AUDUSD', 'USDCHF', 'NZDUSD', 'XAUUSD', 'XAGUSD', 'XPTUSD', 'GOLD', 'SILVER', 'PLATINUM'].some(p => a.includes(p))
+    );
 };
 
 /**
@@ -132,3 +142,71 @@ export const calculatePipsDiff = (current: number, previous: number, asset: Asse
     const pipScale = getPipScale(asset);
     return Number(((current - previous) * pipScale).toFixed(1));
 };
+
+/**
+ * Returns the exact price delta representing N pips (default: 10 pips) for tick direction transitions.
+ * - XAUUSD / XPTUSD: 10 pips = 1.00 (e.g. 3,665.15 -> 3,666.15 UP, -> 3,664.15 DOWN)
+ * - XAGUSD: 10 pips = 0.10
+ * - Standard Forex (EURUSD, GBPUSD, etc.): 10 pips = 0.0010
+ * - JPY Forex (USDJPY, GBPJPY, etc.): 10 pips = 0.10
+ * - USOIL / SOLUSD / BNBUSD: 10 ticks = 0.10
+ * - ETHUSD: 10 ticks = 1.00
+ * - BTCUSD / NASDAQ: 10 points = 10.00
+ */
+export const getTickThresholdPriceDiff = (asset: Asset | string, pips: number = 10): number => {
+    const a = (asset || '').toUpperCase();
+    if (a.includes('XAUUSD') || a.includes('GOLD') || a.includes('XPTUSD') || a.includes('PLATINUM')) {
+        return pips / 10;
+    }
+    if (a.includes('XAGUSD') || a.includes('SILVER') || a.includes('JPY')) {
+        return pips / 100;
+    }
+    if (['EURUSD', 'GBPUSD', 'AUDUSD', 'USDCHF', 'NZDUSD'].some(p => a.includes(p))) {
+        return pips / 10000;
+    }
+    if (a.includes('USOIL') || a.includes('SOL') || a.includes('BNB')) {
+        return pips * 0.01;
+    }
+    if (a.includes('ETH')) {
+        return pips * 0.1;
+    }
+    return pips;
+};
+
+export interface StepTickResult {
+    tick: 'UP' | 'DOWN' | 'NEUTRAL';
+    anchorPrice: number;
+    triggered: boolean;
+}
+
+/**
+ * Evaluates tick direction using a strict N-pip (default 10 pips) step from anchorPrice.
+ * Tick only flips to UP when currentPrice rises >= 10 pips from anchorPrice,
+ * or DOWN when currentPrice drops >= 10 pips from anchorPrice.
+ */
+export const evaluateStepTick = (
+    currentPrice: number,
+    anchorPrice: number,
+    prevTick: 'UP' | 'DOWN' | 'NEUTRAL',
+    asset: Asset | string,
+    thresholdPips: number = 10
+): StepTickResult => {
+    if (!currentPrice || !isFinite(currentPrice)) {
+        return { tick: prevTick, anchorPrice, triggered: false };
+    }
+    if (!anchorPrice || anchorPrice <= 0 || !isFinite(anchorPrice)) {
+        return { tick: prevTick || 'NEUTRAL', anchorPrice: currentPrice, triggered: false };
+    }
+    const step = getTickThresholdPriceDiff(asset, thresholdPips);
+    const epsilon = step * 1e-6;
+    const delta = currentPrice - anchorPrice;
+
+    if (delta >= step - epsilon) {
+        return { tick: 'UP', anchorPrice: currentPrice, triggered: true };
+    }
+    if (delta <= -(step - epsilon)) {
+        return { tick: 'DOWN', anchorPrice: currentPrice, triggered: true };
+    }
+    return { tick: prevTick, anchorPrice, triggered: false };
+};
+

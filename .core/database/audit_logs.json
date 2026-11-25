@@ -1,0 +1,729 @@
+[
+  {
+    "timestamp": 1795285002549,
+    "isoTime": "2026-11-21T18:16:42.549Z",
+    "event": "USER_LOGIN_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "qa_pw_test_1795285001013",
+    "role": "NONE",
+    "details": {
+      "username": "qa_pw_test_1795285001013",
+      "id": "usr_1795285001423_a9af347a"
+    }
+  },
+  {
+    "timestamp": 1795285002433,
+    "isoTime": "2026-11-21T18:16:42.433Z",
+    "event": "USER_CHANGE_PASSWORD",
+    "ip": "127.0.0.1",
+    "user": "qa_pw_test_1795285001013",
+    "role": "USER",
+    "details": {
+      "username": "qa_pw_test_1795285001013",
+      "id": "usr_1795285001423_a9af347a"
+    }
+  },
+  {
+    "timestamp": 1795285002201,
+    "isoTime": "2026-11-21T18:16:42.201Z",
+    "event": "USER_LOGIN_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "qa_pw_test_1795285001013",
+    "role": "NONE",
+    "details": {
+      "username": "qa_pw_test_1795285001013",
+      "id": "usr_1795285001423_a9af347a"
+    }
+  },
+  {
+    "timestamp": 1795285002078,
+    "isoTime": "2026-11-21T18:16:42.078Z",
+    "event": "ADMIN_RESET_PASSWORD",
+    "ip": "127.0.0.1",
+    "user": "VinzxFx",
+    "role": "DEV",
+    "details": {
+      "targetId": "usr_1795285001423_a9af347a",
+      "username": "qa_pw_test_1795285001013"
+    }
+  },
+  {
+    "timestamp": 1795285001955,
+    "isoTime": "2026-11-21T18:16:41.955Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "127.0.0.1",
+    "user": "qa_pw_test_1795285001013",
+    "role": "NONE",
+    "details": {
+      "username": "qa_pw_test_1795285001013",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795285001850,
+    "isoTime": "2026-11-21T18:16:41.850Z",
+    "event": "ADMIN_ACCEPT_USER",
+    "ip": "127.0.0.1",
+    "user": "VinzxFx",
+    "role": "DEV",
+    "details": {
+      "targetId": "usr_1795285001423_a9af347a",
+      "username": "qa_pw_test_1795285001013"
+    }
+  },
+  {
+    "timestamp": 1795285001790,
+    "isoTime": "2026-11-21T18:16:41.790Z",
+    "event": "USER_LOGIN_PROMPT_ACTIVATION",
+    "ip": "127.0.0.1",
+    "user": "Ryuu",
+    "role": "NONE",
+    "details": {
+      "username": "Ryuu",
+      "id": "usr_1794875430343_a3297959"
+    }
+  },
+  {
+    "timestamp": 1795285001783,
+    "isoTime": "2026-11-21T18:16:41.783Z",
+    "event": "USER_LOGIN_PROMPT_ACTIVATION",
+    "ip": "127.0.0.1",
+    "user": "beat123",
+    "role": "NONE",
+    "details": {
+      "username": "beat123",
+      "id": "usr_1794590372419_ac8f83f9"
+    }
+  },
+  {
+    "timestamp": 1795285001777,
+    "isoTime": "2026-11-21T18:16:41.777Z",
+    "event": "USER_LOGIN_GOOGLE_GUIDED",
+    "ip": "127.0.0.1",
+    "user": "akhmad sidik",
+    "role": "NONE",
+    "details": {
+      "username": "akhmad sidik",
+      "id": "lSc1q937YCf67xnUQXlwR991Ulr1"
+    }
+  },
+  {
+    "timestamp": 1795285001437,
+    "isoTime": "2026-11-21T18:16:41.437Z",
+    "event": "USER_REGISTER_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "qa_pw_test_1795285001013",
+    "role": "NONE",
+    "details": {
+      "username": "qa_pw_test_1795285001013",
+      "id": "usr_1795285001423_a9af347a"
+    }
+  },
+  {
+    "timestamp": 1795096031522,
+    "isoTime": "2026-11-19T13:47:11.522Z",
+    "event": "RATE_LIMIT_BLOCKED",
+    "ip": "203.0.113.99",
+    "user": "anonymous",
+    "role": "NONE",
+    "details": {
+      "ip": "203.0.113.99",
+      "path": "/api/auth/login",
+      "limit": 10,
+      "windowMs": 900000
+    }
+  },
+  {
+    "timestamp": 1795096031521,
+    "isoTime": "2026-11-19T13:47:11.521Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096031512,
+    "isoTime": "2026-11-19T13:47:11.512Z",
+    "event": "RATE_LIMIT_BLOCKED",
+    "ip": "203.0.113.99",
+    "user": "anonymous",
+    "role": "NONE",
+    "details": {
+      "ip": "203.0.113.99",
+      "path": "/api/auth/login",
+      "limit": 10,
+      "windowMs": 900000
+    }
+  },
+  {
+    "timestamp": 1795096031409,
+    "isoTime": "2026-11-19T13:47:11.409Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096031405,
+    "isoTime": "2026-11-19T13:47:11.405Z",
+    "event": "RATE_LIMIT_BLOCKED",
+    "ip": "203.0.113.99",
+    "user": "anonymous",
+    "role": "NONE",
+    "details": {
+      "ip": "203.0.113.99",
+      "path": "/api/auth/login",
+      "limit": 10,
+      "windowMs": 900000
+    }
+  },
+  {
+    "timestamp": 1795096031301,
+    "isoTime": "2026-11-19T13:47:11.301Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096031296,
+    "isoTime": "2026-11-19T13:47:11.296Z",
+    "event": "RATE_LIMIT_BLOCKED",
+    "ip": "203.0.113.99",
+    "user": "anonymous",
+    "role": "NONE",
+    "details": {
+      "ip": "203.0.113.99",
+      "path": "/api/auth/login",
+      "limit": 10,
+      "windowMs": 900000
+    }
+  },
+  {
+    "timestamp": 1795096031193,
+    "isoTime": "2026-11-19T13:47:11.193Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096031181,
+    "isoTime": "2026-11-19T13:47:11.181Z",
+    "event": "RATE_LIMIT_BLOCKED",
+    "ip": "203.0.113.99",
+    "user": "anonymous",
+    "role": "NONE",
+    "details": {
+      "ip": "203.0.113.99",
+      "path": "/api/auth/login",
+      "limit": 10,
+      "windowMs": 900000
+    }
+  },
+  {
+    "timestamp": 1795096031078,
+    "isoTime": "2026-11-19T13:47:11.078Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096030965,
+    "isoTime": "2026-11-19T13:47:10.965Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096030839,
+    "isoTime": "2026-11-19T13:47:10.839Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096030722,
+    "isoTime": "2026-11-19T13:47:10.722Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096030614,
+    "isoTime": "2026-11-19T13:47:10.614Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096030419,
+    "isoTime": "2026-11-19T13:47:10.419Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096030302,
+    "isoTime": "2026-11-19T13:47:10.302Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096030196,
+    "isoTime": "2026-11-19T13:47:10.196Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096030090,
+    "isoTime": "2026-11-19T13:47:10.090Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096029988,
+    "isoTime": "2026-11-19T13:47:09.988Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "203.0.113.99",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "reason": "WRONG_PASSWORD"
+    }
+  },
+  {
+    "timestamp": 1795096028777,
+    "isoTime": "2026-11-19T13:47:08.777Z",
+    "event": "USER_LOGIN_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "id": "usr_1795096016531_b085e7cf"
+    }
+  },
+  {
+    "timestamp": 1795096027226,
+    "isoTime": "2026-11-19T13:47:07.226Z",
+    "event": "ADMIN_RESET_PASSWORD",
+    "ip": "127.0.0.1",
+    "user": "YS Gaming chanel",
+    "role": "DEV",
+    "details": {
+      "targetId": "usr_1795096016531_b085e7cf",
+      "username": "qa_verify_1795096015592"
+    }
+  },
+  {
+    "timestamp": 1795096024686,
+    "isoTime": "2026-11-19T13:47:04.686Z",
+    "event": "ADMIN_SET_USER_MEMBERSHIP",
+    "ip": "127.0.0.1",
+    "user": "YS Gaming chanel",
+    "role": "DEV",
+    "details": {
+      "targetId": "usr_1795096016531_b085e7cf",
+      "username": "qa_verify_1795096015592",
+      "tier": "MONTHLY",
+      "expiresAt": 1797774423718
+    }
+  },
+  {
+    "timestamp": 1795096022948,
+    "isoTime": "2026-11-19T13:47:02.948Z",
+    "event": "USER_LOGIN_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "id": "usr_1795096016531_b085e7cf"
+    }
+  },
+  {
+    "timestamp": 1795096021384,
+    "isoTime": "2026-11-19T13:47:01.384Z",
+    "event": "ADMIN_ACCEPT_USER",
+    "ip": "127.0.0.1",
+    "user": "YS Gaming chanel",
+    "role": "DEV",
+    "details": {
+      "targetId": "usr_1795096016531_b085e7cf",
+      "username": "qa_verify_1795096015592"
+    }
+  },
+  {
+    "timestamp": 1795096019350,
+    "isoTime": "2026-11-19T13:46:59.350Z",
+    "event": "USER_LOGIN_PENDING",
+    "ip": "127.0.0.1",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592"
+    }
+  },
+  {
+    "timestamp": 1795096017576,
+    "isoTime": "2026-11-19T13:46:57.576Z",
+    "event": "USER_REGISTER_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "qa_verify_1795096015592",
+    "role": "NONE",
+    "details": {
+      "username": "qa_verify_1795096015592",
+      "id": "usr_1795096016531_b085e7cf"
+    }
+  },
+  {
+    "timestamp": 1794589409265,
+    "isoTime": "2026-11-13T17:03:29.265Z",
+    "event": "GOOGLE_AUTH_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "Google E2E",
+    "role": "USER",
+    "details": {
+      "username": "Google E2E",
+      "email": "google_e2e_1794589400858@test.invalid",
+      "role": "USER"
+    }
+  },
+  {
+    "timestamp": 1794589406436,
+    "isoTime": "2026-11-13T17:03:26.436Z",
+    "event": "ADMIN_ACCEPT_USER",
+    "ip": "127.0.0.1",
+    "user": "YS Gaming chanel",
+    "role": "DEV",
+    "details": {
+      "targetId": "google_e2e_1794589400858",
+      "username": "Google E2E"
+    }
+  },
+  {
+    "timestamp": 1794589403641,
+    "isoTime": "2026-11-13T17:03:23.641Z",
+    "event": "GOOGLE_AUTH_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "Google E2E",
+    "role": "PENDING",
+    "details": {
+      "username": "Google E2E",
+      "email": "google_e2e_1794589400858@test.invalid",
+      "role": "PENDING"
+    }
+  },
+  {
+    "timestamp": 1794589400843,
+    "isoTime": "2026-11-13T17:03:20.843Z",
+    "event": "USER_LOGIN_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "e2e_verify_1794589389271",
+    "role": "NONE",
+    "details": {
+      "username": "e2e_verify_1794589389271",
+      "id": "usr_1794589389415_cd98ed1d"
+    }
+  },
+  {
+    "timestamp": 1794589397919,
+    "isoTime": "2026-11-13T17:03:17.919Z",
+    "event": "ADMIN_SET_USER_MEMBERSHIP",
+    "ip": "127.0.0.1",
+    "user": "YS Gaming chanel",
+    "role": "DEV",
+    "details": {
+      "targetId": "usr_1794589389415_cd98ed1d",
+      "username": "e2e_verify_1794589389271",
+      "tier": "MONTHLY",
+      "expiresAt": 1797267795137
+    }
+  },
+  {
+    "timestamp": 1794589395120,
+    "isoTime": "2026-11-13T17:03:15.120Z",
+    "event": "ADMIN_ACCEPT_USER",
+    "ip": "127.0.0.1",
+    "user": "YS Gaming chanel",
+    "role": "DEV",
+    "details": {
+      "targetId": "usr_1794589389415_cd98ed1d",
+      "username": "e2e_verify_1794589389271"
+    }
+  },
+  {
+    "timestamp": 1794589392215,
+    "isoTime": "2026-11-13T17:03:12.215Z",
+    "event": "USER_REGISTER_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "e2e_verify_1794589389271",
+    "role": "NONE",
+    "details": {
+      "username": "e2e_verify_1794589389271",
+      "id": "usr_1794589389415_cd98ed1d"
+    }
+  },
+  {
+    "timestamp": 1794588941985,
+    "isoTime": "2026-11-13T16:55:41.985Z",
+    "event": "USER_LOGIN_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "testreg_1794588941263",
+    "role": "NONE",
+    "details": {
+      "username": "testreg_1794588941263",
+      "id": "usr_1794588941533_7724246b"
+    }
+  },
+  {
+    "timestamp": 1794588941807,
+    "isoTime": "2026-11-13T16:55:41.807Z",
+    "event": "ADMIN_ACCEPT_USER",
+    "ip": "127.0.0.1",
+    "user": "VinzxFx",
+    "role": "DEV",
+    "details": {
+      "targetId": "usr_1794588941533_7724246b",
+      "username": "testreg_1794588941263"
+    }
+  },
+  {
+    "timestamp": 1794588941727,
+    "isoTime": "2026-11-13T16:55:41.727Z",
+    "event": "DEV_LOGIN_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "VinzxFx",
+    "role": "NONE",
+    "details": {
+      "username": "VinzxFx",
+      "id": "usr_1784409032614_v1nl3rm4q"
+    }
+  },
+  {
+    "timestamp": 1794588941562,
+    "isoTime": "2026-11-13T16:55:41.562Z",
+    "event": "USER_REGISTER_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "testreg_1794588941263",
+    "role": "NONE",
+    "details": {
+      "username": "testreg_1794588941263",
+      "id": "usr_1794588941533_7724246b"
+    }
+  },
+  {
+    "timestamp": 1794245267825,
+    "isoTime": "2026-11-09T17:27:47.825Z",
+    "event": "RATE_LIMIT_BLOCKED",
+    "ip": "127.0.0.1",
+    "user": "anonymous",
+    "role": "NONE",
+    "details": {
+      "ip": "127.0.0.1",
+      "path": "/api/dev/login",
+      "limit": 5,
+      "windowMs": 900000
+    }
+  },
+  {
+    "timestamp": 1794245267819,
+    "isoTime": "2026-11-09T17:27:47.819Z",
+    "event": "DEV_LOGIN_FAILED",
+    "ip": "127.0.0.1",
+    "user": "Hacker",
+    "role": "NONE",
+    "details": {
+      "username": "Hacker",
+      "reason": "NOT_FOUND_OR_NOT_DEV"
+    }
+  },
+  {
+    "timestamp": 1794245267794,
+    "isoTime": "2026-11-09T17:27:47.794Z",
+    "event": "DEV_LOGIN_FAILED",
+    "ip": "127.0.0.1",
+    "user": "Hacker",
+    "role": "NONE",
+    "details": {
+      "username": "Hacker",
+      "reason": "NOT_FOUND_OR_NOT_DEV"
+    }
+  },
+  {
+    "timestamp": 1794245265283,
+    "isoTime": "2026-11-09T17:27:45.283Z",
+    "event": "UNAUTHORIZED_PROFILE_ACCESS_BLOCKED",
+    "ip": "127.0.0.1",
+    "user": "User01",
+    "role": "USER",
+    "details": {
+      "targetId": "Fahmie",
+      "requester": "User01"
+    }
+  },
+  {
+    "timestamp": 1794245265254,
+    "isoTime": "2026-11-09T17:27:45.254Z",
+    "event": "DEV_LOGIN_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "VinzxFx",
+    "role": "NONE",
+    "details": {
+      "username": "VinzxFx",
+      "id": "usr_1784409032614_v1nl3rm4q"
+    }
+  },
+  {
+    "timestamp": 1794245265091,
+    "isoTime": "2026-11-09T17:27:45.091Z",
+    "event": "USER_LOGIN_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "Fahmie",
+    "role": "NONE",
+    "details": {
+      "username": "Fahmie",
+      "id": "hidden-fahmie01"
+    }
+  },
+  {
+    "timestamp": 1794245264940,
+    "isoTime": "2026-11-09T17:27:44.940Z",
+    "event": "USER_LOGIN_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "User01",
+    "role": "NONE",
+    "details": {
+      "username": "User01",
+      "id": "user_01_demo_real"
+    }
+  },
+  {
+    "timestamp": 1794245235373,
+    "isoTime": "2026-11-09T17:27:15.373Z",
+    "event": "REPLAY_VOUCHER_ATTEMPT",
+    "ip": "127.0.0.1",
+    "user": "User01",
+    "role": "NONE",
+    "details": {
+      "code": "VINZX-WEEK-TEST-1794245235361",
+      "username": "User01",
+      "deviceId": "dev_test_device_01"
+    }
+  },
+  {
+    "timestamp": 1794245235367,
+    "isoTime": "2026-11-09T17:27:15.367Z",
+    "event": "VOUCHER_REDEEMED",
+    "ip": "127.0.0.1",
+    "user": "User01",
+    "role": "NONE",
+    "details": {
+      "code": "VINZX-WEEK-TEST-1794245235361",
+      "username": "User01",
+      "deviceId": "dev_test_device_01"
+    }
+  },
+  {
+    "timestamp": 1794245235318,
+    "isoTime": "2026-11-09T17:27:15.318Z",
+    "event": "USER_LOGIN_FAILED",
+    "ip": "127.0.0.1",
+    "user": "User01",
+    "role": "NONE",
+    "details": {
+      "username": "User01",
+      "reason": "USER_NOT_FOUND"
+    }
+  },
+  {
+    "timestamp": 1794245235301,
+    "isoTime": "2026-11-09T17:27:15.301Z",
+    "event": "DEV_LOGIN_SUCCESS",
+    "ip": "127.0.0.1",
+    "user": "VinzxFx",
+    "role": "NONE",
+    "details": {
+      "username": "VinzxFx",
+      "id": "usr_1784409032614_v1nl3rm4q"
+    }
+  },
+  {
+    "timestamp": 1794245235117,
+    "isoTime": "2026-11-09T17:27:15.117Z",
+    "event": "DEV_LOGIN_FAILED",
+    "ip": "127.0.0.1",
+    "user": "Hacker",
+    "role": "NONE",
+    "details": {
+      "username": "Hacker",
+      "reason": "NOT_FOUND_OR_NOT_DEV"
+    }
+  }
+]

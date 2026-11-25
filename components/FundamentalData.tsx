@@ -19,6 +19,7 @@ import {
     Sparkles
 } from 'lucide-react';
 import FundamentalImpactModal from './FundamentalImpactModal';
+import TwoWeekOutlookModal from './TwoWeekOutlookModal';
 import { UserSession } from '../types';
 
 export interface CalendarEvent {
@@ -43,51 +44,59 @@ interface FundamentalDataProps {
     onRequestAuth?: () => void;
 }
 
+const ALLOWED_COUNTRY_CODES = new Set(['US', 'CN', 'JP', 'GB', 'UK', 'EU', 'RU', 'SA', 'IN', 'CA', 'AU', 'CH']);
+const ALLOWED_CURRENCIES = new Set(['USD', 'CNY', 'JPY', 'GBP', 'EUR', 'RUB', 'SAR', 'INR', 'CAD', 'AUD', 'CHF']);
+const ORDERED_CURRENCIES = ['USD', 'CNY', 'JPY', 'GBP', 'EUR', 'RUB', 'SAR', 'INR', 'CAD', 'AUD', 'CHF'];
+
 const COUNTRY_INFO: Record<string, { name: string; flag: string }> = {
     USD: { name: 'Amerika Serikat', flag: '🇺🇸' },
-    GBP: { name: 'Inggris Raya', flag: '🇬🇧' },
-    EUR: { name: 'Uni Eropa', flag: '🇪🇺' },
-    JPY: { name: 'Jepang', flag: '🇯🇵' },
-    AUD: { name: 'Australia', flag: '🇦🇺' },
-    CAD: { name: 'Kanada', flag: '🇨🇦' },
-    CHF: { name: 'Swiss', flag: '🇨🇭' },
-    NZD: { name: 'Selandia Baru', flag: '🇳🇿' },
     CNY: { name: 'China', flag: '🇨🇳' },
-    IDR: { name: 'Indonesia', flag: '🇮🇩' },
-    SGD: { name: 'Singapura', flag: '🇸🇬' },
-    HKD: { name: 'Hong Kong', flag: '🇭🇰' },
-    KRW: { name: 'Korea Selatan', flag: '🇰🇷' },
+    JPY: { name: 'Jepang', flag: '🇯🇵' },
+    GBP: { name: 'Inggris', flag: '🇬🇧' },
+    EUR: { name: 'Uni Eropa', flag: '🇪🇺' },
+    RUB: { name: 'Rusia', flag: '🇷🇺' },
+    SAR: { name: 'Arab Saudi', flag: '🇸🇦' },
     INR: { name: 'India', flag: '🇮🇳' },
-    BRL: { name: 'Brasil', flag: '🇧🇷' },
-    MXN: { name: 'Meksiko', flag: '🇲🇽' },
-    ZAR: { name: 'Afrika Selatan', flag: '🇿🇦' },
-    TRY: { name: 'Turki', flag: '🇹🇷' },
-    SEK: { name: 'Swedia', flag: '🇸🇪' },
-    NOK: { name: 'Norwegia', flag: '🇳🇴' },
+    CAD: { name: 'Kanada', flag: '🇨🇦' },
+    AUD: { name: 'Australia', flag: '🇦🇺' },
+    CHF: { name: 'Swiss', flag: '🇨🇭' },
     US: { name: 'Amerika Serikat', flag: '🇺🇸' },
-    GB: { name: 'Inggris Raya', flag: '🇬🇧' },
-    EU: { name: 'Uni Eropa', flag: '🇪🇺' },
-    JP: { name: 'Jepang', flag: '🇯🇵' },
-    AU: { name: 'Australia', flag: '🇦🇺' },
-    CA: { name: 'Kanada', flag: '🇨🇦' },
-    CH: { name: 'Swiss', flag: '🇨🇭' },
-    NZ: { name: 'Selandia Baru', flag: '🇳🇿' },
     CN: { name: 'China', flag: '🇨🇳' },
+    JP: { name: 'Jepang', flag: '🇯🇵' },
+    GB: { name: 'Inggris', flag: '🇬🇧' },
+    UK: { name: 'Inggris', flag: '🇬🇧' },
+    EU: { name: 'Uni Eropa', flag: '🇪🇺' },
+    RU: { name: 'Rusia', flag: '🇷🇺' },
+    SA: { name: 'Arab Saudi', flag: '🇸🇦' },
+    IN: { name: 'India', flag: '🇮🇳' },
+    CA: { name: 'Kanada', flag: '🇨🇦' },
+    AU: { name: 'Australia', flag: '🇦🇺' },
+    CH: { name: 'Swiss', flag: '🇨🇭' },
+};
+
+const isAllowedCalendarCountry = (countryCode?: string, country?: string, currency?: string): boolean => {
+    const rawCode = (countryCode || '').trim().toUpperCase();
+    const rawCountry = (country || '').trim().toUpperCase();
+    const rawCurrency = (currency || '').trim().toUpperCase();
+    if (rawCode.length === 2) return ALLOWED_COUNTRY_CODES.has(rawCode);
+    if (rawCountry.length === 2) return ALLOWED_COUNTRY_CODES.has(rawCountry);
+    return ALLOWED_CURRENCIES.has(rawCurrency || rawCountry);
 };
 
 const normalizeCurrency = (country: string, currency?: string): string => {
     if (currency && currency.trim().length === 3) return currency.trim().toUpperCase();
     const c = (country || '').trim().toUpperCase();
     if (c === 'US') return 'USD';
+    if (c === 'CN') return 'CNY';
+    if (c === 'JP') return 'JPY';
     if (c === 'GB' || c === 'UK') return 'GBP';
     if (c === 'EU') return 'EUR';
-    if (c === 'JP') return 'JPY';
-    if (c === 'AU') return 'AUD';
+    if (c === 'RU') return 'RUB';
+    if (c === 'SA') return 'SAR';
+    if (c === 'IN') return 'INR';
     if (c === 'CA') return 'CAD';
+    if (c === 'AU') return 'AUD';
     if (c === 'CH') return 'CHF';
-    if (c === 'NZ') return 'NZD';
-    if (c === 'CN') return 'CNY';
-    if (c === 'ID') return 'IDR';
     return c || 'GLOBAL';
 };
 
@@ -231,19 +240,27 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
     const [error, setError] = useState<string | null>(null);
     const [currentTime, setCurrentTime] = useState(getTrueTime());
 
-    // Filters
+    // Filters & explicit 3-criteria gatekeeper for ✨ MENGANALISA DAMPAK NEWS FUNDAMENTAL >
     const [selectedDate, setSelectedDate] = useState<string>('ALL'); // 'ALL' | 'TODAY' | 'TOMORROW' | YYYY-MM-DD
     const [selectedCountry, setSelectedCountry] = useState<string>('ALL');
     const [impactFilter, setImpactFilter] = useState<'ALL' | 'HIGH' | 'HIGH_MEDIUM' | 'MEDIUM' | 'LOW'>('ALL');
+    const [hasPickedImpact, setHasPickedImpact] = useState(false);
+    const [hasPickedDate, setHasPickedDate] = useState(false);
+    const [hasPickedCountry, setHasPickedCountry] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [collapsedCountries, setCollapsedCountries] = useState<Record<string, boolean>>({});
     const [showLowImpact, setShowLowImpact] = useState(true);
     const [expandedEventKey, setExpandedEventKey] = useState<string | null>(null);
     const [showImpactModal, setShowImpactModal] = useState(false);
+    const [showTwoWeekModal, setShowTwoWeekModal] = useState(false);
     const [isScrolled, setIsScrolled] = useState(false);
 
-    // Login gatekeeper for Analisa Dampak Pasar
+    // Login gatekeeper
     const isUserLoggedIn = Boolean(userSession?.isLoggedIn && userSession?.username && userSession.username !== 'Vinzx Family');
+
+    const handleOpenTwoWeekModal = () => {
+        setShowTwoWeekModal(true);
+    };
 
     const handleOpenImpactModal = () => {
         if (!isUserLoggedIn) {
@@ -270,21 +287,23 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
             const json = await res.json();
             if (!json.result || !Array.isArray(json.result)) throw new Error('Format data tidak valid');
             
-            const mappedData: CalendarEvent[] = json.result.map((item: any) => ({
-                title: item.title || '',
-                country: normalizeCurrency(item.country || '', item.currency || ''),
-                countryCode: item.countryCode || item.country || '',
-                currency: item.currency || '',
-                date: item.date,
-                impact: classifyForexFactoryImpact(item),
-                forecast: item.forecast || '',
-                previous: item.previous || '',
-                actual: item.actual || '',
-                indicator: item.indicator || '',
-                period: item.period || '',
-                unit: item.unit || '',
-                comment: item.comment || ''
-            }));
+            const mappedData: CalendarEvent[] = json.result
+                .filter((item: any) => isAllowedCalendarCountry(item.countryCode, item.country, item.currency))
+                .map((item: any) => ({
+                    title: item.title || '',
+                    country: normalizeCurrency(item.country || '', item.currency || ''),
+                    countryCode: item.countryCode || item.country || '',
+                    currency: item.currency || '',
+                    date: item.date,
+                    impact: classifyForexFactoryImpact(item),
+                    forecast: item.forecast || '',
+                    previous: item.previous || '',
+                    actual: item.actual || '',
+                    indicator: item.indicator || '',
+                    period: item.period || '',
+                    unit: item.unit || '',
+                    comment: item.comment || ''
+                }));
             
             mappedData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
             setEvents(mappedData);
@@ -345,22 +364,13 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
             }));
     }, [events, todayKey, tomorrowKey]);
 
-    // Major Currencies & Countries
+    // Strictly the 11 supported countries in requested order
     const availableCountries = useMemo(() => {
-        const set = new Set<string>();
+        const present = new Set<string>();
         events.forEach(e => {
-            if (e.country) set.add(e.country);
+            if (e.country && ALLOWED_CURRENCIES.has(e.country)) present.add(e.country);
         });
-        const list = Array.from(set);
-        const majorCurrencies = ['USD', 'EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD', 'CNY', 'IDR'];
-        return list.sort((a, b) => {
-            const idxA = majorCurrencies.indexOf(a);
-            const idxB = majorCurrencies.indexOf(b);
-            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-            if (idxA !== -1) return -1;
-            if (idxB !== -1) return 1;
-            return a.localeCompare(b);
-        });
+        return ORDERED_CURRENCIES.filter(c => present.has(c) || events.length === 0);
     }, [events]);
 
     // Filter events
@@ -449,7 +459,7 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
             else group.low.push(e);
         });
 
-        const majorOrder = ['USD', 'GBP', 'EUR', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD', 'CNY', 'IDR'];
+        const majorOrder = ORDERED_CURRENCIES;
         const result: DateGroup[] = [];
 
         Array.from(dateMap.entries())
@@ -532,22 +542,18 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
                         <h2 className="text-xs sm:text-sm font-black text-white tracking-wider uppercase truncate">
                             Kalender Fundamental
                         </h2>
-                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold shrink-0">
-                            2 MINGGU
-                        </span>
                     </div>
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
+                    {/* FITUR 1 TERPISAH: ✨ 2 MINGGU (Outlook Makro 14 Hari) */}
                     <button
-                        onClick={handleOpenImpactModal}
-                        className="h-8 px-3 rounded-xl bg-black/40 backdrop-blur-xl text-white text-[11px] font-black border border-purple-500/40 hover:border-purple-400/80 hover:bg-black/55 flex items-center gap-1.5 shadow-[0_0_16px_rgba(168,85,247,0.3)] transition-all active:scale-95 whitespace-nowrap shrink-0"
-                        title="Menganalisa Dampak News Fundamental"
+                        onClick={handleOpenTwoWeekModal}
+                        className="h-8 px-2.5 sm:px-3 rounded-xl bg-cyan-950/50 hover:bg-cyan-900/60 text-cyan-200 text-[10.5px] font-mono font-black border border-cyan-400/45 hover:border-cyan-300 flex items-center gap-1.5 shadow-[0_0_14px_rgba(6,182,212,0.28)] transition-all active:scale-95 whitespace-nowrap shrink-0 cursor-pointer"
+                        title="Outlook Fundamental 2 Minggu (14 Hari)"
                     >
-                        <Sparkles className="w-3.5 h-3.5 text-purple-300 drop-shadow-[0_0_8px_rgba(168,85,247,0.9)] animate-pulse" />
-                        <span className="hidden sm:inline [text-shadow:0_0_10px_rgba(192,132,252,0.9),0_0_20px_rgba(168,85,247,0.6)]">
-                            Menganalisa Dampak News Fundamental
-                        </span>
+                        <Sparkles className="w-3.5 h-3.5 text-cyan-300 animate-pulse shrink-0" />
+                        <span>2 MINGGU</span>
                     </button>
                     <span className="text-[10px] font-mono text-zinc-400 hidden md:inline">
                         {new Date(currentTime).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB
@@ -611,9 +617,9 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
 
                     <div className="flex items-center gap-1 shrink-0 overflow-x-auto no-scrollbar">
                         <button
-                            onClick={() => setImpactFilter('ALL')}
-                            className={`h-8 px-2 sm:px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap ${
-                                impactFilter === 'ALL'
+                            onClick={() => { setImpactFilter('ALL'); setHasPickedImpact(true); }}
+                            className={`h-8 px-2 sm:px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap cursor-pointer ${
+                                hasPickedImpact && impactFilter === 'ALL'
                                 ? 'bg-purple-600 text-white shadow-sm border border-purple-400/50'
                                 : 'bg-white/5 text-zinc-400 border border-white/10 hover:text-white'
                             }`}
@@ -621,8 +627,8 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
                             SEMUA
                         </button>
                         <button
-                            onClick={() => setImpactFilter('HIGH')}
-                            className={`h-8 px-2 sm:px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap flex items-center gap-1 ${
+                            onClick={() => { setImpactFilter('HIGH'); setHasPickedImpact(true); }}
+                            className={`h-8 px-2 sm:px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap flex items-center gap-1 cursor-pointer ${
                                 impactFilter === 'HIGH'
                                 ? 'bg-rose-600 text-white border border-rose-400 shadow-sm'
                                 : 'bg-rose-950/20 text-rose-300 border border-rose-500/30 hover:bg-rose-900/30'
@@ -632,8 +638,8 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
                             HIGH
                         </button>
                         <button
-                            onClick={() => setImpactFilter('MEDIUM')}
-                            className={`h-8 px-2 sm:px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap flex items-center gap-1 ${
+                            onClick={() => { setImpactFilter('MEDIUM'); setHasPickedImpact(true); }}
+                            className={`h-8 px-2 sm:px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap flex items-center gap-1 cursor-pointer ${
                                 impactFilter === 'MEDIUM'
                                 ? 'bg-amber-600 text-white border border-amber-400 shadow-sm'
                                 : 'bg-amber-950/20 text-amber-300 border border-amber-500/30 hover:bg-amber-900/30'
@@ -643,8 +649,8 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
                             MEDIUM
                         </button>
                         <button
-                            onClick={() => setImpactFilter('LOW')}
-                            className={`h-8 px-2 sm:px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap flex items-center gap-1 ${
+                            onClick={() => { setImpactFilter('LOW'); setHasPickedImpact(true); }}
+                            className={`h-8 px-2 sm:px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap flex items-center gap-1 cursor-pointer ${
                                 impactFilter === 'LOW'
                                 ? 'bg-yellow-500 text-black font-extrabold border border-yellow-300 shadow-sm'
                                 : 'bg-yellow-950/20 text-yellow-300 border border-yellow-500/20 hover:bg-yellow-900/30'
@@ -659,8 +665,8 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
                 {/* Row B: Horizontal Timeline / Date Selector */}
                 <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
                     <button
-                        onClick={() => setSelectedDate('ALL')}
-                        className={`h-7 px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                        onClick={() => { setSelectedDate('ALL'); setHasPickedDate(false); }}
+                        className={`h-7 px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap shrink-0 flex items-center gap-1 cursor-pointer ${
                             selectedDate === 'ALL'
                             ? 'bg-purple-600 text-white border border-purple-400 shadow-sm'
                             : 'bg-white/5 text-zinc-300 border border-white/10 hover:text-white'
@@ -671,8 +677,8 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
                     </button>
 
                     <button
-                        onClick={() => setSelectedDate('TODAY')}
-                        className={`h-7 px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                        onClick={() => { setSelectedDate('TODAY'); setHasPickedDate(true); }}
+                        className={`h-7 px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap shrink-0 flex items-center gap-1 cursor-pointer ${
                             selectedDate === 'TODAY'
                             ? 'bg-rose-600 text-white border border-rose-400 shadow-sm'
                             : 'bg-rose-950/30 text-rose-300 border border-rose-500/30 hover:bg-rose-900/30'
@@ -683,8 +689,8 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
                     </button>
 
                     <button
-                        onClick={() => setSelectedDate('TOMORROW')}
-                        className={`h-7 px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap shrink-0 ${
+                        onClick={() => { setSelectedDate('TOMORROW'); setHasPickedDate(true); }}
+                        className={`h-7 px-2.5 rounded-lg text-[10px] font-bold tracking-wider transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                             selectedDate === 'TOMORROW'
                             ? 'bg-amber-600 text-white border border-amber-400 shadow-sm'
                             : 'bg-amber-950/30 text-amber-300 border border-amber-500/30 hover:bg-amber-900/30'
@@ -701,8 +707,8 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
                         return (
                             <button
                                 key={item.key}
-                                onClick={() => setSelectedDate(item.key)}
-                                className={`h-7 px-2 rounded-lg text-[10px] font-mono tracking-wider transition-all whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                                onClick={() => { setSelectedDate(item.key); setHasPickedDate(true); }}
+                                className={`h-7 px-2 rounded-lg text-[10px] font-mono tracking-wider transition-all whitespace-nowrap shrink-0 flex items-center gap-1 cursor-pointer ${
                                     isSelected
                                     ? 'bg-purple-600 text-white border border-purple-400 shadow-sm font-bold'
                                     : 'bg-white/5 text-zinc-400 border border-white/5 hover:text-zinc-200 hover:border-white/20'
@@ -723,8 +729,8 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
                         Negara:
                     </span>
                     <button
-                        onClick={() => setSelectedCountry('ALL')}
-                        className={`h-6.5 px-2 rounded-md text-[10px] font-bold tracking-wider transition-all whitespace-nowrap shrink-0 ${
+                        onClick={() => { setSelectedCountry('ALL'); setHasPickedCountry(false); }}
+                        className={`h-6.5 px-2 rounded-md text-[10px] font-bold tracking-wider transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                             selectedCountry === 'ALL'
                             ? 'bg-purple-600 text-white border border-purple-400'
                             : 'bg-white/5 text-zinc-400 border border-white/10 hover:text-white'
@@ -738,19 +744,46 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
                         return (
                             <button
                                 key={c}
-                                onClick={() => setSelectedCountry(c)}
-                                className={`h-6.5 px-2 rounded-md text-[10px] font-bold tracking-wider transition-all whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                                onClick={() => { setSelectedCountry(c); setHasPickedCountry(true); }}
+                                className={`h-6.5 px-2.5 rounded-md text-[10px] font-bold tracking-wider transition-all whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer ${
                                     isSelected
                                     ? 'bg-purple-600 text-white border border-purple-400'
                                     : 'bg-white/5 text-zinc-300 border border-white/10 hover:border-purple-500/30 hover:text-white'
                                 }`}
                             >
                                 <span>{info.flag}</span>
-                                <span>{c}</span>
+                                <span>{info.name}</span>
                             </button>
                         );
                     })}
                 </div>
+
+                {/* Row D: Slim 3-Criteria Progress Strip */}
+                {(() => {
+                    const isImpactReady = hasPickedImpact;
+                    const isDateReady = hasPickedDate && selectedDate !== 'ALL';
+                    const isCountryReady = hasPickedCountry && selectedCountry !== 'ALL';
+                    const pickedCount = (isImpactReady ? 1 : 0) + (isDateReady ? 1 : 0) + (isCountryReady ? 1 : 0);
+                    return (
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-white/[0.06] text-[9.5px] font-mono">
+                            <div className="flex flex-wrap items-center gap-2 text-zinc-400">
+                                <span className="text-zinc-500 font-bold uppercase">Analisa News ({pickedCount}/3):</span>
+                                <span className={isImpactReady ? 'text-emerald-300 font-bold' : 'text-zinc-500'}>
+                                    {isImpactReady ? '✓' : '○'} 1. Jenis ({impactFilter === 'ALL' ? 'SEMUA' : impactFilter})
+                                </span>
+                                <span className={isDateReady ? 'text-emerald-300 font-bold' : 'text-zinc-500'}>
+                                    {isDateReady ? '✓' : '○'} 2. Tanggal
+                                </span>
+                                <span className={isCountryReady ? 'text-emerald-300 font-bold' : 'text-zinc-500'}>
+                                    {isCountryReady ? '✓' : '○'} 3. Negara
+                                </span>
+                            </div>
+                            <span className={`text-[9px] font-bold ${pickedCount === 3 ? 'text-purple-300' : 'text-zinc-500'}`}>
+                                {pickedCount === 3 ? 'Tombol Analisa Siap ✓' : 'Pilih ketiganya utk buka Analisa ✨'}
+                            </span>
+                        </div>
+                    );
+                })()}
             </div>
 
             {/* 4. MAIN BODY (Grouped: Date -> Country -> High/Medium/Low Impact) */}
@@ -789,6 +822,9 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
                                 setSelectedDate('ALL');
                                 setSelectedCountry('ALL');
                                 setImpactFilter('ALL');
+                                setHasPickedImpact(false);
+                                setHasPickedDate(false);
+                                setHasPickedCountry(false);
                                 setSearchQuery('');
                             }}
                             className="px-3 py-1 bg-purple-600/30 border border-purple-500/40 text-purple-300 text-[11px] font-bold rounded-lg hover:bg-purple-600 hover:text-white transition-all"
@@ -968,41 +1004,89 @@ export const FundamentalData: React.FC<FundamentalDataProps> = ({ onClose, userS
                 )}
             </div>
 
-            {/* FLOATING TRANSLUCENT HORIZONTAL BUTTON */}
-            <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-40 max-w-[94%] transition-all duration-300 ease-out">
-                <button
-                    onClick={handleOpenImpactModal}
-                    className="group relative flex flex-row items-center gap-2.5 sm:gap-3.5 px-4 sm:px-6 py-2.5 sm:py-3 rounded-full bg-black/35 backdrop-blur-xl border border-purple-500/40 hover:border-purple-400/80 hover:bg-black/45 text-white shadow-[0_8px_32px_rgba(147,51,234,0.3)] hover:shadow-[0_8px_40px_rgba(168,85,247,0.55)] transition-all duration-300 hover:scale-[1.02] active:scale-95 cursor-pointer whitespace-nowrap shrink-0"
-                    title="Menganalisa Dampak News Fundamental"
-                >
-                    <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-purple-500/20 border border-purple-400/50 flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(168,85,247,0.6)]">
-                        <Sparkles className="w-3.5 h-3.5 text-purple-300 drop-shadow-[0_0_8px_rgba(168,85,247,0.9)] animate-pulse" />
-                    </div>
+            {/* FLOATING BUTTON: HANYA MUNCUL KETIKA 3 KRITERIA FILTER SUDAH DIPILIH */}
+            {(() => {
+                const canShowImpactButton =
+                    hasPickedImpact &&
+                    hasPickedDate &&
+                    selectedDate !== 'ALL' &&
+                    hasPickedCountry &&
+                    selectedCountry !== 'ALL';
 
-                    <span className="text-[11px] sm:text-xs md:text-sm font-black tracking-wider uppercase text-white whitespace-nowrap shrink-0 [text-shadow:0_0_12px_rgba(192,132,252,0.9),0_0_24px_rgba(168,85,247,0.6)]">
-                        Menganalisa Dampak News Fundamental
-                    </span>
+                const resolvedTargetDateKey =
+                    selectedDate === 'TODAY'
+                        ? todayKey
+                        : selectedDate === 'TOMORROW'
+                        ? tomorrowKey
+                        : selectedDate;
+                const matchedAvail = availableDates.find(d => d.key === resolvedTargetDateKey);
+                const resolvedDateLabel =
+                    selectedDate === 'TODAY'
+                        ? 'Hari Ini'
+                        : selectedDate === 'TOMORROW'
+                        ? 'Besok'
+                        : matchedAvail
+                        ? `${matchedAvail.shortDay} ${matchedAvail.dateNum}`
+                        : resolvedTargetDateKey;
+                const resolvedCountryLabel = COUNTRY_INFO[selectedCountry]?.name || selectedCountry;
+                const resolvedImpactLabel = impactFilter === 'ALL' ? 'SEMUA' : impactFilter;
 
-                    <span className="hidden md:inline-flex items-center px-2 py-0.5 rounded-full bg-purple-500/20 border border-purple-400/40 text-[9px] font-mono text-purple-200 font-bold uppercase tracking-wider shrink-0">
-                        Live
-                    </span>
+                return (
+                    <>
+                        {canShowImpactButton && (
+                            <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-40 max-w-[95%] transition-all duration-300 ease-out animate-in fade-in slide-in-from-bottom-3">
+                                <button
+                                    onClick={handleOpenImpactModal}
+                                    className="group relative flex flex-row items-center gap-2 sm:gap-3 px-4 sm:px-6 py-2.5 sm:py-3 rounded-full bg-black/55 backdrop-blur-xl border border-purple-400/60 hover:border-purple-300 hover:bg-black/75 text-white shadow-[0_8px_32px_rgba(147,51,234,0.4)] hover:shadow-[0_8px_40px_rgba(168,85,247,0.65)] transition-all duration-300 hover:scale-[1.02] active:scale-95 cursor-pointer whitespace-nowrap shrink-0"
+                                    title={`Analisa ${resolvedImpactLabel} • ${resolvedDateLabel} • ${resolvedCountryLabel}`}
+                                >
+                                    <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-purple-500/25 border border-purple-400/60 flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(168,85,247,0.7)]">
+                                        <Sparkles className="w-3.5 h-3.5 text-purple-200 animate-pulse" />
+                                    </div>
 
-                    <div className="w-5 h-5 rounded-full bg-purple-500/20 border border-purple-400/30 flex items-center justify-center shrink-0 group-hover:bg-purple-500/40 group-hover:border-purple-400/60 transition-all">
-                        <ChevronRight className="w-3.5 h-3.5 text-purple-300 group-hover:translate-x-0.5 transition-transform" />
-                    </div>
-                </button>
-            </div>
+                                    <div className="flex flex-col items-start text-left">
+                                        <span className="text-[10.5px] sm:text-xs md:text-sm font-black tracking-wider uppercase text-white whitespace-nowrap shrink-0 [text-shadow:0_0_12px_rgba(192,132,252,0.9),0_0_24px_rgba(168,85,247,0.6)]">
+                                            Menganalisa Dampak News Fundamental
+                                        </span>
+                                        <span className="text-[8.5px] sm:text-[9px] font-mono font-bold text-cyan-300 tracking-wide">
+                                            {resolvedImpactLabel} • {resolvedDateLabel} • {resolvedCountryLabel}
+                                        </span>
+                                    </div>
 
-            {/* IMPACT PROJECTION MODAL */}
-            <FundamentalImpactModal
-                isOpen={showImpactModal}
-                onClose={() => setShowImpactModal(false)}
-                events={events}
-                todayKey={todayKey}
-                availableDates={availableDates}
-                userSession={userSession}
-                onRequestAuth={onRequestAuth}
-            />
+                                    <div className="w-5 h-5 rounded-full bg-purple-500/25 border border-purple-400/40 flex items-center justify-center shrink-0 group-hover:bg-purple-500/45 group-hover:border-purple-300 transition-all">
+                                        <ChevronRight className="w-3.5 h-3.5 text-purple-200 group-hover:translate-x-0.5 transition-transform" />
+                                    </div>
+                                </button>
+                            </div>
+                        )}
+
+                        {/* FITUR 1 MODAL: OUTLOOK 2 MINGGU */}
+                        <TwoWeekOutlookModal
+                            isOpen={showTwoWeekModal}
+                            onClose={() => setShowTwoWeekModal(false)}
+                            events={events}
+                            currentTime={currentTime}
+                            userSession={userSession}
+                            onRequestAuth={onRequestAuth}
+                        />
+
+                        {/* FITUR 2 MODAL: ANALISA MENDALAM 3-FILTER */}
+                        <FundamentalImpactModal
+                            isOpen={showImpactModal}
+                            onClose={() => setShowImpactModal(false)}
+                            events={events}
+                            targetDateKey={resolvedTargetDateKey}
+                            targetDateLabel={resolvedDateLabel}
+                            targetCountry={selectedCountry}
+                            targetCountryLabel={resolvedCountryLabel}
+                            targetImpact={impactFilter}
+                            currentTime={currentTime}
+                            userSession={userSession}
+                            onRequestAuth={onRequestAuth}
+                        />
+                    </>
+                );
+            })()}
         </div>
     );
 };

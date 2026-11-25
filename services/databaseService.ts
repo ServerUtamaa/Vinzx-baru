@@ -142,7 +142,7 @@ const seedDefaultUsers = () => {
         users.push({
             id: 'USER_01_DEMO',
             username: 'User01',
-            passwordHash: 'Membership_Vip_Discount40%',
+            passwordHash: '',
             role: 'USER',
             tokens: 0,
             membershipTier: 'NONE',
@@ -151,9 +151,6 @@ const seedDefaultUsers = () => {
             lastLogin: getTrueTime(),
             history: []
         });
-    } else {
-        // FORCE UPDATE PASSWORD: Jika user sudah ada, pastikan passwordnya benar
-        users[user01Index].passwordHash = 'Membership_Vip_Discount40%';
     }
 
     // 5. Cek User 'System Admin' (Dev)
@@ -162,7 +159,7 @@ const seedDefaultUsers = () => {
         users.push({
             id: 'DEV_ADMIN_01',
             username: 'System Admin',
-            passwordHash: 'admin_secure_key', // You can change this if needed
+            passwordHash: '',
             role: 'DEV',
             tokens: 9999,
             membershipTier: 'VIP',
@@ -173,14 +170,13 @@ const seedDefaultUsers = () => {
         });
     }
 
-
     // 6. Cek User 'Fahmie'
     const fahmieIndex = users.findIndex(u => u.username === 'Fahmie');
     if (fahmieIndex === -1) {
         users.push({
             id: 'USER_FAHMIE_01',
             username: 'Fahmie',
-            passwordHash: 'Membership_1mingguDiscount50%',
+            passwordHash: '',
             role: 'USER',
             tokens: 0,
             membershipTier: 'NONE',
@@ -189,8 +185,6 @@ const seedDefaultUsers = () => {
             lastLogin: getTrueTime(),
             history: []
         });
-    } else {
-        users[fahmieIndex].passwordHash = 'Membership_1mingguDiscount50%';
     }
 
     saveLocalUsers(users);
@@ -414,7 +408,12 @@ export const getUserData = async (username: string, uid?: string): Promise<{user
     }
 
     try {
-        const res = await fetch(`/api/users/me/${uid || username}`);
+        const authToken = localStorage.getItem('AUTH_TOKEN') || localStorage.getItem('DEV_TOKEN') || '';
+        const res = await fetch(`/api/users/me/${uid || username}`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
         if (res.ok) {
             const user = await res.json();
             if (firebaseHistory && firebaseHistory.length > 0) {
@@ -501,9 +500,13 @@ export const addExecutionRecord = async (username: string, record: ExecutionReco
     // 2. Sync ke Backend Lokal Sementara
     let backendHistory: ExecutionRecord[] = [];
     try {
+        const authToken = localStorage.getItem('AUTH_TOKEN') || localStorage.getItem('DEV_TOKEN') || '';
         const res = await fetch(`/api/users/${uid || username}/history`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-auth-key': '[AUTH_KEY]:VINZX_OMEGA_2026' },
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
             body: JSON.stringify({ record })
         });
         if (res.ok) {
@@ -533,13 +536,12 @@ export const getAllUsers = async (): Promise<UserRecord[]> => {
 
 export const updateUserTokens = async (targetUsername: string, amount: number, operation: 'ADD' | 'SUBTRACT' | 'SET'): Promise<UserRecord[]> => {
     try {
-        const devToken = localStorage.getItem('DEV_TOKEN') || '';
+        const authToken = localStorage.getItem('AUTH_TOKEN') || localStorage.getItem('DEV_TOKEN') || '';
         await fetch(`/api/users/${targetUsername}/tokens`, {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json', 
-                'x-dev-token': devToken,
-                'x-auth-key': '[AUTH_KEY]:VINZX_OMEGA_2026' 
+                'Authorization': `Bearer ${authToken}`
             },
             body: JSON.stringify({ amount, operation })
         });
@@ -560,13 +562,12 @@ export const updateUserTokens = async (targetUsername: string, amount: number, o
 
 export const updateUserMembership = async (targetUsername: string, tier: MembershipTier, durationDays: number): Promise<UserRecord[]> => {
     try {
-        const devToken = localStorage.getItem('DEV_TOKEN') || '';
+        const authToken = localStorage.getItem('AUTH_TOKEN') || localStorage.getItem('DEV_TOKEN') || '';
         await fetch(`/api/users/${targetUsername}/membership`, {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json', 
-                'x-dev-token': devToken,
-                'x-auth-key': '[AUTH_KEY]:VINZX_OMEGA_2026' 
+                'Authorization': `Bearer ${authToken}`
             },
             body: JSON.stringify({ tier, durationDays })
         });

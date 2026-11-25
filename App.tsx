@@ -26,7 +26,7 @@ import { SecurityManager } from './utils/SecurityManager';
 import { blacklistSetup, reinforceWinningPatterns, storeTradeMemory } from './core/feedbackEngine';
 import { TradeMemory } from './types';
 import { loadFromCloud } from './core/cloudFeedbackSync';
-import { getAssetPrecision, calculateSpreadPips, formatPrice } from './utils/priceFormatters';
+import { getAssetPrecision, calculateSpreadPips, evaluateStepTick, formatPrice } from './utils/priceFormatters';
 
 const App: React.FC = () => {
   useEffect(() => {
@@ -72,19 +72,96 @@ const App: React.FC = () => {
   useEffect(() => {
         let unsubscribe: any = null;
         
-        import('firebase/auth').then(async ({ getAuth, onAuthStateChanged }) => {
+        import('firebase/auth').then(async ({ signOut, onAuthStateChanged }) => {
             const { auth } = await import('./services/firebaseConfig');
             unsubscribe = onAuthStateChanged(auth, async (user) => {
                 if (user) {
                     try {
-                        const res = await fetch(`/api/users/me/${user.uid}`);
-                        
+                        let authToken = localStorage.getItem('AUTH_TOKEN') || localStorage.getItem('DEV_TOKEN') || '';
+                        let res = authToken
+                            ? await fetch(`/api/users/me/${encodeURIComponent(user.uid)}`, {
+                                headers: { 'Authorization': `Bearer ${authToken}` }
+                              })
+                            : null;
+
+                        // If no backend JWT yet or expired (401), exchange Firebase Google ID token cleanly
+                        if (!res || res.status === 401) {
+                            const idToken = await user.getIdToken(true);
+                            const authRes = await fetch('/api/auth/google', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    id: user.uid,
+                                    email: user.email,
+                                    username: user.displayName || 'User Vinzx',
+                                    mode: 'LOGIN',
+                                    idToken,
+                                    deviceId: getDeviceId()
+                                })
+                            });
+
+                            if (authRes.ok) {
+                                const authData = await authRes.json();
+                                if (authData.token) {
+                                    localStorage.setItem('AUTH_TOKEN', authData.token);
+                                }
+                                if (authData.devToken) {
+                                    localStorage.setItem('DEV_TOKEN', authData.devToken);
+                                }
+                                if (authData.serverTime) setServerTimeOffset(authData.serverTime);
+                                const activeUser = authData.user;
+                                if (activeUser) {
+                                    let finalTier = activeUser.membershipTier || 'NONE';
+                                    let finalExpiresAt = activeUser.membershipExpiresAt || 0;
+                                    const now = getTrueTime();
+                                    if (activeUser.role !== 'DEV' && finalTier !== 'NONE' && finalExpiresAt > 0 && now > finalExpiresAt) {
+                                        finalTier = 'NONE';
+                                        finalExpiresAt = 0;
+                                    }
+                                    const nextSession: UserSession = {
+                                        isLoggedIn: true,
+                                        role: activeUser.role || 'USER',
+                                        username: activeUser.username || user.displayName || 'Vinzx User',
+                                        uid: activeUser.id || user.uid,
+                                        tokens: activeUser.tokens || 0,
+                                        membershipTier: finalTier,
+                                        membershipExpiresAt: finalExpiresAt
+                                    };
+                                    saveCurrentUserSession(nextSession);
+                                    setUserSession(nextSession);
+                                }
+                                return;
+                            } else {
+                                if (authRes.status === 400) {
+                                    const errBody = await authRes.json().catch(() => ({}));
+                                    if (errBody?.error && errBody.error.includes('Admin Vinzxx')) {
+                                        setShowBannedPopup(true);
+                                    }
+                                }
+                                if (authRes.status === 400 || authRes.status === 404) {
+                                    await signOut(auth);
+                                    localStorage.removeItem('CURRENT_USER_SESSION');
+                                    localStorage.removeItem('AUTH_TOKEN');
+                                    localStorage.removeItem('DEV_TOKEN');
+                                    setUserSession({
+                                        isLoggedIn: false,
+                                        role: 'USER',
+                                        username: 'Guest',
+                                        tokens: 0,
+                                        membershipTier: 'NONE',
+                                        membershipExpiresAt: 0
+                                    });
+                                }
+                                return;
+                            }
+                        }
+
                         if (res.ok) {
                             const data = await res.json();
                             if (data.role === 'PENDING') {
-                                const { getAuth, signOut } = await import('firebase/auth');
-                                signOut(auth);
+                                await signOut(auth);
                                 localStorage.removeItem('CURRENT_USER_SESSION');
+                                localStorage.removeItem('AUTH_TOKEN');
                                 setUserSession({
                                     isLoggedIn: false,
                                     role: 'USER',
@@ -97,9 +174,9 @@ const App: React.FC = () => {
                             }
                             if (data.role === 'REJECTED') {
                                 setShowBannedPopup(true);
-                                const { getAuth, signOut } = await import('firebase/auth');
-                                signOut(auth);
+                                await signOut(auth);
                                 localStorage.removeItem('CURRENT_USER_SESSION');
+                                localStorage.removeItem('AUTH_TOKEN');
                                 setUserSession({
                                     isLoggedIn: false,
                                     role: 'USER',
@@ -111,28 +188,29 @@ const App: React.FC = () => {
                                 return;
                             }
                             if (data.serverTime) setServerTimeOffset(data.serverTime);
-                            // Handle expiration logic if any
                             let finalTier = data.membershipTier || 'NONE';
                             let finalExpiresAt = data.membershipExpiresAt || 0;
                             const now = getTrueTime();
-                            if (finalTier !== 'NONE' && finalExpiresAt > 0 && now > finalExpiresAt) {
+                            if (data.role !== 'DEV' && finalTier !== 'NONE' && finalExpiresAt > 0 && now > finalExpiresAt) {
                                 finalTier = 'NONE';
                                 finalExpiresAt = 0;
                             }
 
-                            setUserSession({
+                            const nextSession: UserSession = {
                                 isLoggedIn: true,
                                 role: data.role || 'USER',
                                 username: data.username || user.displayName || 'Vinzx User',
-                                uid: user.uid,
+                                uid: data.id || user.uid,
                                 tokens: data.tokens || 0,
                                 membershipTier: finalTier,
                                 membershipExpiresAt: finalExpiresAt
-                            });
+                            };
+                            saveCurrentUserSession(nextSession);
+                            setUserSession(nextSession);
                         } else if (res.status === 404) {
-                            const { getAuth, signOut } = await import('firebase/auth');
-                            signOut(auth);
+                            await signOut(auth);
                             localStorage.removeItem('CURRENT_USER_SESSION');
+                            localStorage.removeItem('AUTH_TOKEN');
                             setUserSession({
                                 isLoggedIn: false,
                                 role: 'USER',
@@ -157,18 +235,32 @@ const App: React.FC = () => {
                             membershipExpiresAt: 0
                         });
                     } else if (currentSession && currentSession.isLoggedIn) {
-                        // Validate local session
+                        // Validate local session with backend JWT
                         try {
-                            if (currentSession.username === 'VinzxFx' && currentSession.role === 'DEV') {
-                                setUserSession(currentSession);
+                            const authToken = localStorage.getItem('AUTH_TOKEN') || localStorage.getItem('DEV_TOKEN') || '';
+                            if (!authToken) {
+                                localStorage.removeItem('CURRENT_USER_SESSION');
+                                localStorage.removeItem('DEV_TOKEN');
+                                setUserSession({
+                                    isLoggedIn: false,
+                                    role: 'USER',
+                                    username: 'Guest',
+                                    tokens: 0,
+                                    membershipTier: 'NONE',
+                                    membershipExpiresAt: 0
+                                });
                                 return;
                             }
 
-                            const res = await fetch(`/api/users/me/${currentSession.uid || currentSession.username}`);
+                            const identifier = encodeURIComponent(currentSession.uid || currentSession.username);
+                            const res = await fetch(`/api/users/me/${identifier}`, {
+                                headers: { 'Authorization': `Bearer ${authToken}` }
+                            });
                             if (res.ok) {
                                 const data = await res.json();
                                 if (data.role === 'PENDING') {
                                     localStorage.removeItem('CURRENT_USER_SESSION');
+                                    localStorage.removeItem('AUTH_TOKEN');
                                     setUserSession({
                                         isLoggedIn: false,
                                         role: 'USER',
@@ -182,6 +274,7 @@ const App: React.FC = () => {
                                 if (data.role === 'REJECTED') {
                                     setShowBannedPopup(true);
                                     localStorage.removeItem('CURRENT_USER_SESSION');
+                                    localStorage.removeItem('AUTH_TOKEN');
                                     setUserSession({
                                         isLoggedIn: false,
                                         role: 'USER',
@@ -196,12 +289,12 @@ const App: React.FC = () => {
                                 let finalTier = data.membershipTier || 'NONE';
                                 let finalExpiresAt = data.membershipExpiresAt || 0;
                                 const now = getTrueTime();
-                                if (finalTier !== 'NONE' && finalExpiresAt > 0 && now > finalExpiresAt) {
+                                if (data.role !== 'DEV' && finalTier !== 'NONE' && finalExpiresAt > 0 && now > finalExpiresAt) {
                                     finalTier = 'NONE';
                                     finalExpiresAt = 0;
                                 }
 
-                                setUserSession({
+                                const nextSession: UserSession = {
                                     isLoggedIn: true,
                                     role: data.role || 'USER',
                                     username: data.username,
@@ -209,9 +302,13 @@ const App: React.FC = () => {
                                     tokens: data.tokens || 0,
                                     membershipTier: finalTier,
                                     membershipExpiresAt: finalExpiresAt
-                                });
-                            } else if (res.status === 404) {
+                                };
+                                saveCurrentUserSession(nextSession);
+                                setUserSession(nextSession);
+                            } else if (res.status === 401 || res.status === 404) {
                                 localStorage.removeItem('CURRENT_USER_SESSION');
+                                localStorage.removeItem('AUTH_TOKEN');
+                                localStorage.removeItem('DEV_TOKEN');
                                 setUserSession({
                                     isLoggedIn: false,
                                     role: 'USER',
@@ -355,6 +452,7 @@ const App: React.FC = () => {
   const tickIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentAssetRef = useRef<Asset>(currentAsset);
+  const currentTimeframeRef = useRef<TimeFrame>(currentTimeframe);
   
   const lastUpdateRef = useRef<number>(0);
 
@@ -381,20 +479,20 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-      // Sync local session with DB just to get History, 
-      // but TRUST current session logic for Auth status to keep "Vinzx Family" logged in.
+      if (!userSession.isLoggedIn || userSession.username === 'Guest') return;
       const fetchUserData = async () => {
           const freshData = await getUserData(userSession.username, userSession.uid);
           if (freshData) {
               
-              if (freshData.user.deviceId && freshData.user.deviceId !== getDeviceId()) {
+              if (userSession.role !== 'DEV' && freshData.user.deviceId && freshData.user.deviceId !== getDeviceId()) {
                   alert("Akun Anda Sedang Di Pakai Di Perangkat lain");
-                  import('firebase/auth').then(({ getAuth, signOut }) => {
+                  import('firebase/auth').then(({ signOut }) => {
                       import('./services/firebaseConfig').then(({ auth }) => {
                           signOut(auth);
                       });
                   });
                   localStorage.removeItem('CURRENT_USER_SESSION');
+                  localStorage.removeItem('AUTH_TOKEN');
                   setUserSession({
                       isLoggedIn: false,
                       role: 'USER',
@@ -408,12 +506,13 @@ const App: React.FC = () => {
 
               if (freshData.user.role === 'REJECTED') {
                   setShowBannedPopup(true);
-                  import('firebase/auth').then(({ getAuth, signOut }) => {
+                  import('firebase/auth').then(({ signOut }) => {
                       import('./services/firebaseConfig').then(({ auth }) => {
                           signOut(auth);
                       });
                   });
                   localStorage.removeItem('CURRENT_USER_SESSION');
+                  localStorage.removeItem('AUTH_TOKEN');
                   setUserSession({
                       isLoggedIn: false,
                       role: 'USER',
@@ -427,6 +526,7 @@ const App: React.FC = () => {
               setUserSession(prev => {
                   const newSession = { 
                       ...prev, 
+                      role: freshData.user.role || prev.role,
                       tokens: freshData.user.tokens,
                       membershipTier: freshData.user.membershipTier || 'NONE',
                       membershipExpiresAt: freshData.user.membershipExpiresAt || 0
@@ -439,14 +539,12 @@ const App: React.FC = () => {
                   setHistory(freshData.user.history);
                   calculateStreaks(freshData.user.history);
               }
-              // Skip daily bonus logic for Vinzx Family static login to avoid annoying popups every refresh
           }
       };
-      // Run immediately on mount
       fetchUserData(); 
-      const syncInterval = setInterval(fetchUserData, 2000); 
+      const syncInterval = setInterval(fetchUserData, 4000); 
       return () => clearInterval(syncInterval);
-  }, [userSession.username, history.length]);
+  }, [userSession.isLoggedIn, userSession.username, userSession.uid, userSession.role, history.length]);
 
   const calculateStreaks = (records: ExecutionRecord[]) => {
       if (records.length === 0) { setWinStreak(0); setLossStreak(0); return; }
@@ -471,7 +569,22 @@ const App: React.FC = () => {
     chartDataRef.current = [];
     setPriceOffset(0); 
     setAnalysis(null); 
+    setLivePrice(prev => ({ ...prev, price: 0, tick: 'NEUTRAL', precision: getAssetPrecision(asset) }));
     setIsPlayingAudio(false); 
+    setIsGeneratingAudio(false);
+    audioService.stop();
+    if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+  };
+
+  const handleTimeframeChange = (tf: TimeFrame) => {
+    if (tf === currentTimeframeRef.current) return;
+    currentTimeframeRef.current = tf;
+    setCurrentTimeframe(tf);
+    setMarketData([]);
+    chartDataRef.current = [];
+    setAnalysis(null);
+    setLivePrice(prev => ({ ...prev, tick: 'NEUTRAL', timeframe: tf }));
+    setIsPlayingAudio(false);
     setIsGeneratingAudio(false);
     audioService.stop();
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
@@ -479,10 +592,13 @@ const App: React.FC = () => {
 
   const handleSaveExecution = async (status: 'WIN' | 'LOSS') => {
       if (!analysis) return;
+      const decimals = getAssetPrecision(currentAsset);
       const record: ExecutionRecord = {
           id: crypto.randomUUID(), asset: currentAsset, signal: analysis.signal as 'BUY' | 'SELL',
-          entry: analysis.entryPrice + priceOffset, sl: analysis.stopLoss + priceOffset,
-          tp: analysis.takeProfit + priceOffset, status: status, timestamp: getTrueTime(), rr: analysis.riskRewardRatio
+          entry: Number((analysis.entryPrice + priceOffset).toFixed(decimals)),
+          sl: Number((analysis.stopLoss + priceOffset).toFixed(decimals)),
+          tp: Number((analysis.takeProfit + priceOffset).toFixed(decimals)),
+          status: status, timestamp: getTrueTime(), rr: analysis.riskRewardRatio
       };
       
       const setupSignature = analysis.setupSignature || `${currentAsset}-${currentTimeframe}-${analysis.trendPrediction || 'RANGING'}`;
@@ -571,6 +687,8 @@ const App: React.FC = () => {
       let runningPrice = 0;
       let last24hChange = 0;
       let last24hChangePct = 0;
+      let tickAnchorPrice = 0;
+      let currentTickDir: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL';
 
       // Silky 60FPS Batch Render Scheduler
       let rafPending = false;
@@ -697,6 +815,9 @@ const App: React.FC = () => {
 
                           const activeC = finalCandles[finalCandles.length - 1];
                           if (activeC) {
+                              if (tickAnchorPrice <= 0) {
+                                  tickAnchorPrice = activeC.close;
+                              }
                               const spreadDist = precision === 5 ? 0.00008 : precision === 3 ? 0.014 : precision === 2 ? (tvSymbol?.includes('XAU') ? 0.25 : 0.04) : 0.0001;
                               const initBid = activeC.close - spreadDist / 2;
                               const initAsk = activeC.close + spreadDist / 2;
@@ -710,7 +831,7 @@ const App: React.FC = () => {
                                   high: activeC.high,
                                   low: activeC.low,
                                   open: activeC.open,
-                                  tick: 'NEUTRAL',
+                                  tick: currentTickDir,
                                   lastTickTime: Date.now(),
                                   precision,
                                   timeframe
@@ -796,9 +917,11 @@ const App: React.FC = () => {
                   if (runningPrice < lastCandle.low) lastCandle.low = runningPrice;
               }
 
-              // Update live price HUD
-              const prevP = livePriceRef.current.price || runningPrice;
-              const tickDir: 'UP' | 'DOWN' | 'NEUTRAL' = runningPrice > prevP ? 'UP' : runningPrice < prevP ? 'DOWN' : (livePriceRef.current.tick || 'NEUTRAL');
+              // Update live price HUD using strict 10-pip step tick evaluation
+              const stepTick = evaluateStepTick(runningPrice, tickAnchorPrice, currentTickDir, asset, 10);
+              tickAnchorPrice = stepTick.anchorPrice;
+              currentTickDir = stepTick.tick;
+              const tickDir: 'UP' | 'DOWN' | 'NEUTRAL' = currentTickDir;
               const spreadDist = precision === 5 ? 0.00008 : precision === 3 ? 0.014 : precision === 2 ? (tvSymbol?.includes('XAU') ? 0.25 : 0.04) : 0.0001;
               const rawBid = runningPrice - spreadDist / 2;
               const rawAsk = runningPrice + spreadDist / 2;
@@ -815,7 +938,7 @@ const App: React.FC = () => {
                   low: activeCandle.low,
                   open: activeCandle.open,
                   tick: tickDir,
-                  lastTickTime: now,
+                  lastTickTime: stepTick.triggered ? now : (livePriceRef.current.lastTickTime || now),
                   precision,
                   timeframe
               });
@@ -848,6 +971,8 @@ const App: React.FC = () => {
       const tfMs = getTimeframeDurationMs(timeframe);
       const precision = getAssetPrecision(asset);
       if (!symbol) return; 
+      let tickAnchorPrice = 0;
+      let currentTickDir: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL';
 
       // Silky 60FPS Batch Render Scheduler
       let rafPending = false;
@@ -878,6 +1003,9 @@ const App: React.FC = () => {
                    })).filter(c => c.close > 0);
                    
                    chartDataRef.current = rawCandles; 
+                   if (tickAnchorPrice <= 0 && rawCandles.length > 0) {
+                       tickAnchorPrice = rawCandles[rawCandles.length - 1].close;
+                   }
                    isSyntheticRef.current = false;
                    setMarketData(rawCandles); 
                    return true;
@@ -976,8 +1104,10 @@ const App: React.FC = () => {
                         if (price < lastCandle.low) lastCandle.low = price;
                     }
 
-                    const prevP = livePriceRef.current.price || price;
-                    const tickDir: 'UP' | 'DOWN' | 'NEUTRAL' = price > prevP ? 'UP' : price < prevP ? 'DOWN' : (livePriceRef.current.tick || 'NEUTRAL');
+                    const stepTick = evaluateStepTick(price, tickAnchorPrice, currentTickDir, asset, 10);
+                    tickAnchorPrice = stepTick.anchorPrice;
+                    currentTickDir = stepTick.tick;
+                    const tickDir: 'UP' | 'DOWN' | 'NEUTRAL' = currentTickDir;
                     const spread = precision === 2 ? 0.5 : 0.01;
                     const firstCandle = currentData[0];
                     const activeCandle = currentData[currentData.length - 1];
@@ -993,7 +1123,7 @@ const App: React.FC = () => {
                         low: activeCandle.low,
                         open: activeCandle.open,
                         tick: tickDir,
-                        lastTickTime: tradeTime,
+                        lastTickTime: stepTick.triggered ? tradeTime : (livePriceRef.current.lastTickTime || tradeTime),
                         precision,
                         timeframe
                     });
@@ -1144,8 +1274,10 @@ const App: React.FC = () => {
     
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
+    currentAssetRef.current = currentAsset;
+    currentTimeframeRef.current = currentTimeframe;
     let isActive = true;
-    const checkActive = () => isActive && currentAssetRef.current === currentAsset;
+    const checkActive = () => isActive && currentAssetRef.current === currentAsset && currentTimeframeRef.current === currentTimeframe;
     chartDataRef.current = [];
     setMarketData([]); 
 
@@ -1212,27 +1344,34 @@ const App: React.FC = () => {
     const visibilityHandler = () => { if (document.hidden) isBackgrounded = true; };
     document.addEventListener("visibilitychange", visibilityHandler);
 
+    const targetAsset = currentAsset;
+    const targetTimeframe = currentTimeframe;
+    const candlesSnapshot = marketData.map(c => applyOffset(c, priceOffset));
+
     try {
-        const dataWithOffset = marketData.map(c => applyOffset(c, priceOffset));
-        const result = await analyzeMarketStructure(currentAsset, dataWithOffset, currentTimeframe, null, winStreak, lossStreak, userSession.username || userSession.uid); // PASS TIMEFRAME
-        setAnalysis({ ...result, timeframe: currentTimeframe });
+        let result = await analyzeMarketStructure(targetAsset, candlesSnapshot, targetTimeframe, null, winStreak, lossStreak, userSession.username || userSession.uid);
+        if (currentAssetRef.current !== targetAsset || currentTimeframeRef.current !== targetTimeframe) return;
+        if (!result || result.stopLoss === 0 || result.takeProfit === 0 || result.riskRewardRatio === '0:0') {
+            result = analyzeLocalMarket(targetAsset, candlesSnapshot, targetTimeframe, null, winStreak, lossStreak);
+        }
+        setAnalysis({ ...result, timeframe: targetTimeframe });
         playNotificationSound();
 
         if ('Notification' in window && Notification.permission === 'granted' && (document.hidden || isBackgrounded)) {
              new Notification('Analisa Vinzx AI Selesai', {
-                 body: `SIGNAL EXECUTED: ${result.signal}\nPair: ${currentAsset} | Timeframe: ${currentTimeframe}\nSilahkan buka kembali aplikasi untuk melihat detail strategi.`,
+                 body: `SIGNAL EXECUTED: ${result.signal}\nPair: ${targetAsset} | Timeframe: ${targetTimeframe}\nSilahkan buka kembali aplikasi untuk melihat detail strategi.`,
                  icon: 'https://i.ibb.co.com/LXQTP3Pj/image-1.jpg'
              });
         }
     } catch (e) {
-        const dataWithOffset = marketData.map(c => applyOffset(c, priceOffset));
-        const result = analyzeLocalMarket(currentAsset, dataWithOffset, currentTimeframe, null, winStreak, lossStreak); // PASS TIMEFRAME
-        setAnalysis({ ...result, timeframe: currentTimeframe });
+        const result = analyzeLocalMarket(targetAsset, candlesSnapshot, targetTimeframe, null, winStreak, lossStreak);
+        if (currentAssetRef.current !== targetAsset || currentTimeframeRef.current !== targetTimeframe) return;
+        setAnalysis({ ...result, timeframe: targetTimeframe });
         playNotificationSound();
 
         if ('Notification' in window && Notification.permission === 'granted' && (document.hidden || isBackgrounded)) {
              new Notification('Analisa Lokal (Offline) Selesai', {
-                 body: `SIGNAL: ${result.signal} | Pair: ${currentAsset}\nSilahkan cek aplikasi.`,
+                 body: `SIGNAL: ${result.signal} | Pair: ${targetAsset} (${targetTimeframe})\nSilahkan cek aplikasi.`,
                  icon: 'https://i.ibb.co.com/LXQTP3Pj/image-1.jpg'
              });
         }
@@ -1342,7 +1481,7 @@ const App: React.FC = () => {
                         currentAsset={currentAsset}
                         currentTimeframe={currentTimeframe}
                         onAssetChange={handleAssetChange}
-                        onTimeframeChange={setCurrentTimeframe}
+                        onTimeframeChange={handleTimeframeChange}
                         onAnalyze={handleAnalyze}
                         isAnalyzing={isAnalyzing}
                         analysis={analysis}

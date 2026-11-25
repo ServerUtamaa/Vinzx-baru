@@ -11,13 +11,13 @@ export const pairProfiles: Record<Asset, PairBehavior> = {
     [Asset.USOIL]: { asset: Asset.USOIL, volatilityModel: 'HIGH', spreadAverage: 0.05, bestSession: 'NEWYORK', blacklistPatterns: [] },
     [Asset.EURUSD]: { asset: Asset.EURUSD, volatilityModel: 'LOW', spreadAverage: 0.0001, bestSession: 'LONDON', blacklistPatterns: [] },
     [Asset.GBPUSD]: { asset: Asset.GBPUSD, volatilityModel: 'MEDIUM', spreadAverage: 0.00015, bestSession: 'LONDON', blacklistPatterns: [] },
-    [Asset.USDJPY]: { asset: Asset.USDJPY, volatilityModel: 'MEDIUM', spreadAverage: 0.0001, bestSession: 'ASIA', blacklistPatterns: [] },
+    [Asset.USDJPY]: { asset: Asset.USDJPY, volatilityModel: 'MEDIUM', spreadAverage: 0.012, bestSession: 'ASIA', blacklistPatterns: [] },
     [Asset.AUDUSD]: { asset: Asset.AUDUSD, volatilityModel: 'MEDIUM', spreadAverage: 0.0001, bestSession: 'ASIA', blacklistPatterns: [] },
     [Asset.USDCHF]: { asset: Asset.USDCHF, volatilityModel: 'LOW', spreadAverage: 0.0001, bestSession: 'LONDON', blacklistPatterns: [] },
     [Asset.NZDUSD]: { asset: Asset.NZDUSD, volatilityModel: 'MEDIUM', spreadAverage: 0.0001, bestSession: 'ASIA', blacklistPatterns: [] },
     [Asset.NASDAQ]: { asset: Asset.NASDAQ, volatilityModel: 'HIGH', spreadAverage: 1.0, bestSession: 'NEWYORK', blacklistPatterns: [] },
-    [Asset.GBPJPY]: { asset: Asset.GBPJPY, volatilityModel: 'HIGH', spreadAverage: 0.0002, bestSession: 'LONDON', blacklistPatterns: [] },
-    [Asset.EURJPY]: { asset: Asset.EURJPY, volatilityModel: 'MEDIUM', spreadAverage: 0.00015, bestSession: 'LONDON', blacklistPatterns: [] },
+    [Asset.GBPJPY]: { asset: Asset.GBPJPY, volatilityModel: 'HIGH', spreadAverage: 0.025, bestSession: 'LONDON', blacklistPatterns: [] },
+    [Asset.EURJPY]: { asset: Asset.EURJPY, volatilityModel: 'MEDIUM', spreadAverage: 0.018, bestSession: 'LONDON', blacklistPatterns: [] },
 };
 
 export function getPairBehavior(asset: Asset): PairBehavior {

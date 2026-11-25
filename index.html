@@ -8,7 +8,98 @@
     <title>Vinzx Trade Artificial</title>
     <meta name="description" content="AI Trading Assistant with SMC Analysis & Realtime Signals">
     <meta name="theme-color" content="#050505" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Vinzx AI" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="apple-touch-icon" href="https://i.ibb.co/nMBpN1pG/file-00000000a644820b804c0f932efad356.png" />
+    <script>
+      (function () {
+        try {
+          if (window.location && window.location.search && window.location.search.indexOf('_vinzx_u=') !== -1) {
+            var cleaned = window.location.search
+              .replace(/([?&])_vinzx_u=[^&]*(&?)/g, function (_m, p1, p2) {
+                return p2 ? p1 : '';
+              })
+              .replace(/[?&]$/, '');
+            window.history.replaceState(null, '', window.location.pathname + cleaned + (window.location.hash || ''));
+          }
+        } catch (e) {}
+
+        window.__VINZX_MOUNTED__ = false;
+        var recovering = false;
+
+        window.__vinzxForceHardRecover = function (reason) {
+          if (recovering) return;
+          if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+          try {
+            var now = Date.now();
+            var lastTs = Number(sessionStorage.getItem('vinzx_boot_recover_ts') || '0');
+            var count = Number(sessionStorage.getItem('vinzx_boot_recover_cnt') || '0');
+            if (now - lastTs < 20000) return;
+            if (now - lastTs < 120000 && count >= 2) return;
+            sessionStorage.setItem('vinzx_boot_recover_ts', String(now));
+            sessionStorage.setItem('vinzx_boot_recover_cnt', String((now - lastTs > 120000 ? 0 : count) + 1));
+          } catch (e) {}
+
+          recovering = true;
+
+          var finishReload = function () {
+            try {
+              var sep = window.location.search ? '&' : '?';
+              var cleanSearch = (window.location.search || '')
+                .replace(/([?&])_vinzx_u=[^&]*/g, '')
+                .replace(/^&/, '?');
+              var target = window.location.pathname + cleanSearch + (cleanSearch ? '&' : '?') + '_vinzx_u=' + Date.now() + (window.location.hash || '');
+              window.location.replace(target);
+            } catch (e) {
+              window.location.reload();
+            }
+          };
+
+          var clearCachesPromise = Promise.resolve();
+          try {
+            if ('caches' in window) {
+              clearCachesPromise = window.caches.keys().then(function (names) {
+                return Promise.all(names.map(function (n) { return window.caches.delete(n); }));
+              }).catch(function () {});
+            }
+          } catch (e) {}
+
+          var refreshHtmlPromise = Promise.resolve();
+          try {
+            if (typeof fetch === 'function') {
+              refreshHtmlPromise = Promise.all([
+                fetch('/', { cache: 'reload' }).catch(function () {}),
+                fetch('/index.html', { cache: 'reload' }).catch(function () {})
+              ]);
+            }
+          } catch (e) {}
+
+          Promise.all([clearCachesPromise, refreshHtmlPromise]).then(finishReload, finishReload);
+        };
+
+        window.addEventListener('error', function (ev) {
+          var target = ev && ev.target;
+          if (target && target.tagName === 'SCRIPT') {
+            var src = target.src || '';
+            if (src.indexOf('/assets/') !== -1 || src.indexOf('index.tsx') !== -1) {
+              window.__vinzxForceHardRecover('script-load-error');
+            }
+          }
+        }, true);
+
+        setTimeout(function () {
+          if (!window.__VINZX_MOUNTED__) {
+            window.__vinzxForceHardRecover('boot-timeout');
+          }
+        }, 15000);
+      })();
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -21,19 +112,38 @@
               'glass': 'rgba(23, 23, 23, 0.8)',
             },
             fontFamily: {
-              mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+              sans: ['"Roboto"', 'Arial', 'Helvetica', 'sans-serif'],
+              mono: ['"JetBrains Mono"', '"Courier New"', 'monospace'],
             }
           }
         }
       }
     </script>
     <style>
-      body {
+      :root, html, body, #root, button, input, textarea, select, option {
+        font-family: 'Roboto', Arial, Helvetica, sans-serif;
+        font-weight: 500;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+      }
+      html, body {
+        font-family: 'Roboto', Arial, Helvetica, sans-serif !important;
+        font-weight: 500;
         background-color: #050505;
         color: #e5e5e5;
         overflow: hidden; /* Prevent body scroll for the app-like feel */
         touch-action: manipulation; /* Improve touch response */
         -webkit-tap-highlight-color: transparent;
+      }
+      .font-sans {
+        font-family: 'Roboto', Arial, Helvetica, sans-serif !important;
+      }
+      .font-mono, code, pre, kbd, samp {
+        font-family: 'JetBrains Mono', 'Courier New', monospace !important;
+      }
+      svg text[font-family="monospace"],
+      svg tspan {
+        font-family: 'JetBrains Mono', 'Courier New', monospace !important;
       }
       
       /* Custom scrollbar ONLY for specific areas (like Analysis Log) */

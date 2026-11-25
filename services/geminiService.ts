@@ -11,6 +11,8 @@ import { calculateAdaptiveRiskReward } from "../core/riskEngine";
 import { isBlacklisted, blacklistSetup, reinforceWinningPatterns, getPatternWeight, getTPExtension } from "../core/feedbackEngine";
 import { getPairBehavior } from "../core/pairProfiles";
 import { chartTokenEngine as tokenEngine, PRIORITY_MODELS } from "./tokenEngine";
+import { getAssetPrecision, formatPrice } from "../utils/priceFormatters";
+import { enforceTimeframeTradingPlan, getTimeframePlanSpec } from "../core/timeframePlan";
 
 const responseSchema: Schema = {
   type: Type.OBJECT,
@@ -111,7 +113,8 @@ export const analyzeMarketStructure = async (
 ): Promise<AnalysisResult> => {
   try {
     const currentPrice = candles[candles.length - 1].close;
-    const atr = calculateATR(candles, 14);
+    const precision = getAssetPrecision(asset);
+    const atr = calculateATR(candles, 14) || currentPrice * 0.0005;
     const patterns = detectCandlestickPatterns(candles);
 
     // PRE-ANALYSIS LAYER
@@ -161,18 +164,19 @@ export const analyzeMarketStructure = async (
         blacklistSetup(setupSignature, 24 * 60 * 60 * 1000);
     }
 
-    // STRICTLY USE 250 CANDLES AS REQUESTED BY USER
+    // STRICTLY USE UP TO 250 CANDLES AS REQUESTED BY USER
     const dataSlice = candles.slice(-250); 
     const dataString = dataSlice.map(c => 
-      `${c.open},${c.high},${c.low},${c.close}`
-    ).join('\\n');
+      `${c.open.toFixed(precision)},${c.high.toFixed(precision)},${c.low.toFixed(precision)},${c.close.toFixed(precision)}`
+    ).join('\n');
     // --- QUARTERLY THEORY (AMDX) & SMC CONTEXT (ADVANCED HYBRID AI) ---
     let feedbackContext = `
       🧠 **INTERNAL VISION ENGINE: ADVANCED INSTITUTIONAL TRADING AI & QUARTERLY THEORY** 🧠
-      ENVIRONMENT: ${asset} | TIMEFRAME: ${timeframe} | PAIR_PROFILE: ${pairProfile.volatilityModel}
+      ENVIRONMENT: ${asset} | TIMEFRAME: ${timeframe} | MODE: ${getTimeframePlanSpec(asset, timeframe).modeName} | PLAN_RR: ${getTimeframePlanSpec(asset, timeframe).rrLabel} | MANDATORY_SL: ${getTimeframePlanSpec(asset, timeframe).slLabel} | MANDATORY_TP: ${getTimeframePlanSpec(asset, timeframe).tpLabel} | PAIR_PROFILE: ${pairProfile.volatilityModel} | REQUIRED_DECIMALS: ${precision}
       
       [STATE SPACE S(t) - COMPUTER VISION & SMC RESULTS]
-      PRICE: ${currentPrice}
+      PRICE: ${formatPrice(currentPrice, asset)}
+      ATR (${timeframe}): ${atr.toFixed(precision)}
       DETECTED_VISUAL_PATTERNS: ${patterns.map(p => p.name).join(', ') || 'NONE'}
       MARKET_STRUCTURE: ${structure.trend} | BOS/CHOCH/MSS: ${structure.bos}/${structure.choch}/${structure.mss}
       STRUCTURE_POINTS: ${(structure as any).structurePoints?.join(', ') || 'NONE'}
@@ -316,14 +320,15 @@ export const analyzeMarketStructure = async (
            - DAY TRADE (M30): Plan RR = 1:4. SL Buffer = 1.5x ATR. Target TP = Entry ± (Risk * 4.0). Field 'rr' MUST strictly be "1:4".
            - SWING MINGGUAN (H1): Plan RR = 1:5. SL Buffer = 2.0x ATR. Target TP = Entry ± (Risk * 5.0). Field 'rr' MUST strictly be "1:5".
            - SWING BULANAN (H4, D1): Plan RR = 1:6. SL Buffer = 2.5x ATR. Target TP = Entry ± (Risk * 6.0). Field 'rr' MUST strictly be "1:6".
-         * TARGET PROJECTION DETAIL:
+         * TARGET PROJECTION DETAIL (STRICTLY ENFORCED):
          * For XAUUSD (Gold):
-           - M1 (Scalping): TP 40-50 pips, SL strictly 20 pips.
-           - M5 (Scalping2): TP 60-120 pips, SL strictly 40-50 pips.
-           - M15 (Intraday): TP 120-240 pips, SL strictly 60-70 pips.
-           - M30 (Daytrade): TP 240-350 pips, SL strictly 80 pips.
-           - H1 (Swing 1-2 Weeks): TP 360-500 pips, SL strictly 80-100 pips.
-           - H4 (Swing 2-4 Weeks): TP 500-800 pips, SL strictly 120-150 pips.
+           - M1 (Scalping): SL strictly 20 pips ($2.00), TP 40-50 pips ($4.00-$5.00), RR 1:2.
+           - M5 (Scalping): SL strictly 40-50 pips ($4.00-$5.00), TP 60-120 pips ($6.00-$12.00), RR 1:2.
+           - M15 (Intraday): SL strictly 60-70 pips ($6.00-$7.00), TP 120-240 pips ($12.00-$24.00), RR 1:3.
+           - M30 (Day Trade): SL strictly 80 pips ($8.00), TP 240-350 pips ($24.00-$35.00), RR 1:4.
+           - H1 (Swing Mingguan): SL strictly 80-100 pips ($8.00-$10.00), TP 360-500 pips ($36.00-$50.00), RR 1:5.
+           - H4 (Swing Bulanan): SL strictly 120-150 pips ($12.00-$15.00), TP 500-800 pips ($50.00-$80.00), RR 1:6.
+           - D1 (Swing Bulanan): SL = Struktur D1 + ATR, TP = 6x Risk, RR 1:6.
          * For XAGUSD (Silver):
            - M1 (Scalping): TP 40-70 pips, SL strictly 20-30 pips.
            - M5 (Scalping2): TP 80-160 pips, SL strictly 40-60 pips.
@@ -338,10 +343,15 @@ export const analyzeMarketStructure = async (
            - M30 (Daytrade): TP 176-275 pips, SL strictly 55-77 pips.
            - H1 (Swing 3-7 Days): TP 275-440 pips, SL strictly 77-110 pips.
            - H4 (Swing 1-3 Weeks): TP 440-770 pips, SL strictly 110-165 pips.
-         * For other pairs: 
-           - Scalping (M1, M5): Target 10-20 pips. High precision, fast execution.
-           - Intraday / Day Trade (M15, M30): Target 30-50 pips. Focus on daily AMDX cycles.
-           - Swing (H1, H4): Target extended swings (major structural ERLs). Hold position through internal pullbacks.
+         * For Forex & other pairs (${asset}): 
+           - M1 / M5 (Scalping, RR 1:2): SL 10-20 pips, TP 20-40 pips. High precision limit entry, fast execution.
+           - M15 (Intraday, RR 1:3): SL 15-30 pips, TP 45-90 pips. Focus on M15/H1 liquidity & daily AMDX cycles.
+           - M30 (Day Trade, RR 1:4): SL 20-40 pips, TP 80-160 pips. Align with H1/H4 PD Arrays.
+           - H1 (Swing Mingguan, RR 1:5): SL 30-55 pips, TP 150-275 pips. Target H4/D1 structural ERLs.
+           - H4 / D1 (Swing Bulanan, RR 1:6): SL 50-100 pips, TP 300-600 pips. Hold position through pullbacks toward major Daily/Weekly liquidity pools.
+       - **FOREX PIP & DECIMAL PRECISION MANDATE (CRITICAL):**
+         * Standard Forex pairs (EURUSD, GBPUSD, AUDUSD, USDCHF, NZDUSD): MUST ALWAYS use **5 decimal places** (e.g., 1.09842). 1 pip = 0.0001 (4th decimal), 1 pipette = 0.00001 (5th decimal). NEVER truncate to 2 or 3 decimals.
+         * JPY Forex pairs (USDJPY, GBPJPY, EURJPY): MUST ALWAYS use **3 decimal places** (e.g., 159.822). 1 pip = 0.01 (2nd decimal), 1 pipette = 0.001 (3rd decimal). NEVER truncate to 2 decimals.
        - **FALSE BREAKOUT PREVENTION & ZERO FLOATING (SBR/RBS):** You MUST avoid Fake Breakouts and Fake Breakdowns. NEVER enter immediately on a breakout candle. ALWAYS wait for a liquidity sweep (Judas Swing) or a clear RETRACEMENT (Pullback) to test the broken level as new support (RBS) or new resistance (SBR). Check if volume/momentum confirms the move; if not, it is a trap. If price enters a SIDEWAYS/RANGING state, ONLY trade from the extreme boundaries, never in the middle. Your entry must be EXACTLY at the optimal zone to ensure Zero Floating.
        - **XAUUSD PIP CALCULATION:** For XAUUSD, assume a $1.00 price movement (e.g., from 2300.00 to 2301.00) equals 10 pips. Therefore, a 20 pip SL is a $2.00 price difference. A 100 pip TP is a $10.00 price difference. Use this exact math when calculating exact 'entry', 'sl', and 'tp' values.
        - **XAGUSD PIP CALCULATION:** For XAGUSD, assume a $0.10 price movement (e.g., from 23.00 to 23.10) equals 10 pips. Therefore, a 30 pip SL is a $0.30 price difference. A 100 pip TP is a $1.00 price difference. Use this exact math when calculating exact 'entry', 'sl', and 'tp' values.
@@ -384,7 +394,7 @@ export const analyzeMarketStructure = async (
       - **ZERO FLOATING SNIPER ENTRY:** Your primary goal is ZERO FLOATING ENTRY and absolute precision. DO NOT chase price at market value if already moving. Provide a limit order at the extreme unmitigated OB/FVG mitigation level so price immediately runs in profit without floating drawdown.
       - Your reasoning MUST explicitly state if you detected a Fakeout/Sweep, where the extreme POI is, and why the entry and SL are placed there.
       
-      **Generate precise Entry, SL, TP based on the specific Asset Risk Parameters and Timeframe. Calculate RL metrics (State Value, Advantage, Policy Probabilities). Provide the exact next price prediction and trend prediction.**
+      **Generate precise Entry, SL, TP based on the specific Asset Risk Parameters (${asset}, EXACTLY ${precision} decimal places matching ${formatPrice(currentPrice, asset)}) and Timeframe (${timeframe}). Calculate RL metrics (State Value, Advantage, Policy Probabilities). Provide the exact next_price_prediction (with ${precision} decimal places) and trend_prediction.**
     `;
 
     try {
@@ -485,8 +495,10 @@ export const analyzeMarketStructure = async (
     } else {
       console.error("AI Analysis Failed:", error);
     }
+    const fallbackDecimals = getAssetPrecision(asset);
+    const fallbackEntry = Number((candles[candles.length - 1]?.close || 0).toFixed(fallbackDecimals));
     return {
-      signal: 'BUY', confidence: 50, entryPrice: candles[candles.length - 1].close, stopLoss: 0, takeProfit: 0, riskRewardRatio: "0:0",
+      signal: 'BUY', confidence: 50, entryPrice: fallbackEntry, stopLoss: 0, takeProfit: 0, riskRewardRatio: "0:0",
       reasoning: Array(6).fill(isRateLimit ? "SMART TOKEN ENGINE: SISA KUOTA TIDAK MENCUKUPI DI SEMUA MODEL (INSUFFICIENT_CAPACITY)." : "SYSTEM ERROR: NEURAL DISCONNECT."), smcConceptsFound: [], timestamp: new Date().toLocaleTimeString(), timeframe: timeframe,
       activeModel: "OFFLINE / INSUFFICIENT QUOTA",
       drlMetrics: { stateValue: 0, advantage: 0, buyProb: 1, sellProb: 0 }
@@ -494,7 +506,7 @@ export const analyzeMarketStructure = async (
   }
 };
 
-const parseResponse = (
+export const parseResponse = (
     text: string, 
     timeframe: TimeFrame, 
     currentPrice: number, 
@@ -506,64 +518,36 @@ const parseResponse = (
     const cleanText = text.replace(/```json|```/g, '').trim();
     const result = JSON.parse(cleanText) as GeminiResponseSchema;
 
-    // Algoritma Dapur Pacu v4.0 Plan RR per Mode
-    let modeName = "SCALPING";
-    let planRR = 2.0;
-    let rrLabel = "1:2";
-    let tp1R = 1.0, tp2R = 1.5, tp3R = 2.0;
-    if (timeframe === 'M1' || timeframe === 'M5') {
-      modeName = "SCALPING"; planRR = 2.0; rrLabel = "1:2"; tp1R = 1.0; tp2R = 1.5; tp3R = 2.0;
-    } else if (timeframe === 'M15') {
-      modeName = "INTRADAY"; planRR = 3.0; rrLabel = "1:3"; tp1R = 1.5; tp2R = 2.0; tp3R = 3.0;
-    } else if (timeframe === 'M30') {
-      modeName = "DAY TRADE"; planRR = 4.0; rrLabel = "1:4"; tp1R = 2.0; tp2R = 3.0; tp3R = 4.0;
-    } else if (timeframe === 'H1') {
-      modeName = "SWING MINGGUAN"; planRR = 5.0; rrLabel = "1:5"; tp1R = 2.0; tp2R = 3.5; tp3R = 5.0;
-    } else if (timeframe === 'H4' || timeframe === 'D1') {
-      modeName = "SWING BULANAN"; planRR = 6.0; rrLabel = "1:6"; tp1R = 2.5; tp2R = 4.0; tp3R = 6.0;
-    }
-
-    const decimals = currentPrice > 100 ? 2 : (currentPrice > 5 ? 3 : 5);
+    const decimals = getAssetPrecision(asset);
     const pairProfile = getPairBehavior(asset);
+    const normalizedSignal: 'BUY' | 'SELL' = result.signal === 'SELL' ? 'SELL' : 'BUY';
 
-    // Dynamic Anti-Stop-Hunt ATR Buffer: guarantees SL is never hit before expanding to TP
-    const atrMultiplier = (timeframe === 'M1' || timeframe === 'M5') ? 1.2 : (timeframe === 'M15' ? 1.5 : (timeframe === 'M30' ? 1.8 : 2.0));
-    const minBuffer = Math.max(atr * atrMultiplier, pairProfile.spreadAverage * 3.5);
+    const plan = enforceTimeframeTradingPlan({
+      asset,
+      timeframe,
+      signal: normalizedSignal,
+      currentPrice,
+      atr,
+      spreadAverage: pairProfile.spreadAverage,
+      candidateEntry: result.entry,
+      candidateSl: result.sl,
+      candidateTp: result.tp,
+    });
 
-    let entry = result.entry;
-    let sl = result.sl;
-    let tp = result.tp;
+    const { spec, entryPrice: entry, stopLoss: sl, takeProfit: tp, tp1Price, riskRewardRatio: rrLabel } = plan;
 
-    // Sanity check entry: If entry is invalid or wildly off (> 15% deviation), anchor to current price
-    if (!entry || isNaN(entry) || Math.abs(entry - currentPrice) / currentPrice > 0.15) {
-      entry = currentPrice;
-    }
-
-    // Zero-Floating Sniper Entry alignment:
-    if (result.signal === 'BUY' && entry > currentPrice) {
-      entry = currentPrice;
-    }
-    if (result.signal === 'SELL' && entry < currentPrice) {
-      entry = currentPrice;
-    }
-
-    // Strict Anti-Stop-Hunt SL and Plan RR TP calculation
-    if (result.signal === 'BUY') {
-      if (!sl || isNaN(sl) || sl >= entry || (entry - sl) < minBuffer) {
-        sl = Number((entry - minBuffer).toFixed(decimals));
-      }
-      const risk = entry - sl;
-      tp = Number((entry + (risk * planRR)).toFixed(decimals));
-    } else {
-      if (!sl || isNaN(sl) || sl <= entry || (sl - entry) < minBuffer) {
-        sl = Number((entry + minBuffer).toFixed(decimals));
-      }
-      const risk = sl - entry;
-      tp = Number((entry - (risk * planRR)).toFixed(decimals));
-    }
+    const nextPricePred =
+      typeof result.next_price_prediction === 'number' &&
+      !isNaN(result.next_price_prediction) &&
+      result.next_price_prediction > 0 &&
+      Math.abs(result.next_price_prediction - entry) <= Math.abs(tp - entry) * 1.25 &&
+      ((normalizedSignal === 'BUY' && result.next_price_prediction > entry) ||
+        (normalizedSignal === 'SELL' && result.next_price_prediction < entry))
+        ? Number(result.next_price_prediction.toFixed(decimals))
+        : tp1Price;
 
     return {
-      signal: result.signal as 'BUY' | 'SELL',
+      signal: normalizedSignal,
       confidence: result.confidence,
       entryPrice: entry,
       stopLoss: sl,
@@ -571,8 +555,10 @@ const parseResponse = (
       riskRewardRatio: rrLabel,
       reasoning: result.reasoning,
       smcConceptsFound: result.concepts,
-      prediction: result.prediction || `Mode ${modeName} - Target harga diproyeksikan ke arah likuiditas dengan eksekusi TP pada Plan RR ${rrLabel} (TP1: 1:${tp1R}, TP2: 1:${tp2R}, Target Utama TP3: 1:${tp3R}).`,
-      nextPricePrediction: result.next_price_prediction,
+      prediction:
+        result.prediction ||
+        `Mode ${spec.modeName} (${timeframe}) - SL ${plan.usesPips ? `${plan.slPips} pips` : spec.slLabel}, TP ${plan.usesPips ? `${plan.tpPips} pips` : spec.tpLabel} pada Plan RR ${rrLabel} (TP1: 1:${spec.tp1R}, TP2: 1:${spec.tp2R}, Target Utama TP3: 1:${spec.tp3R}).`,
+      nextPricePrediction: nextPricePred,
       trendPrediction: result.trend_prediction,
       timestamp: new Date().toLocaleTimeString(),
       timeframe: timeframe,

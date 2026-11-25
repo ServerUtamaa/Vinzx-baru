@@ -1,22 +1,80 @@
 {
-  "collections": [
-    {
-      "name": "users",
-      "schema": {
-        "type": "object",
-        "properties": {
-          "id": { "type": "string" },
-          "username": { "type": "string" },
-          "email": { "type": "string" },
-          "role": { "type": "string" },
-          "tokens": { "type": "number" },
-          "membershipTier": { "type": "string" },
-          "membershipExpiresAt": { "type": "number" },
-          "createdAt": { "type": "number" },
-          "lastLogin": { "type": "number" }
-        },
-        "required": ["id", "username"]
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with tokens, role, and membership metadata",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "username": { "type": "string", "maxLength": 64 },
+        "email": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["USER", "DEV", "GUEST", "PENDING", "REJECTED"] },
+        "tokens": { "type": "number" },
+        "membershipTier": { "type": "string" },
+        "membershipExpiresAt": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "lastLogin": { "type": "number" },
+        "updatedAt": { "type": "number" },
+        "deviceId": { "type": "string", "maxLength": 128 },
+        "history": { "type": "array" }
+      },
+      "required": ["id", "username"]
+    },
+    "ServerBackup": {
+      "title": "ServerBackup",
+      "description": "AES-256-GCM encrypted server-side persistent database snapshot and per-user vaults",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "userId": { "type": "string" },
+        "data": { "type": "string" },
+        "iv": { "type": "string" },
+        "tag": { "type": "string" },
+        "encrypted": { "type": "boolean" },
+        "compressed": { "type": "boolean" },
+        "checksum": { "type": "string" },
+        "userCount": { "type": "number" },
+        "updated_at": { "type": "number" }
+      },
+      "required": ["data", "updated_at"]
+    },
+    "AiMemory": {
+      "title": "AiMemory",
+      "description": "Global AI trading engine learned patterns and reinforcement states",
+      "type": "object",
+      "properties": {
+        "X12_TRADE_MEMORY": { "type": "array" },
+        "X12_BLACKLIST": { "type": "array" },
+        "X12_DIAGNOSTICS": { "type": "array" },
+        "X12_REINFORCEMENT": { "type": "array" },
+        "lastUpdated": { "type": "number" }
+      }
+    },
+    "GlobalTradeHistory": {
+      "title": "GlobalTradeHistory",
+      "description": "Global institutional trade signals history for model training",
+      "type": "object",
+      "properties": {
+        "history": { "type": "array" }
       }
     }
-  ]
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles accessible by owner, backend sync, or verified admin"
+    },
+    "/server_backup/{docId}": {
+      "schema": "ServerBackup",
+      "description": "Encrypted backend persistence snapshot strictly locked to backend sync service account"
+    },
+    "/ai_memory/{docId}": {
+      "schema": "AiMemory",
+      "description": "Global AI trade intelligence memory readable by app clients"
+    },
+    "/global_trade_history/{docId}": {
+      "schema": "GlobalTradeHistory",
+      "description": "Global execution trade history readable by app clients"
+    }
+  }
 }
